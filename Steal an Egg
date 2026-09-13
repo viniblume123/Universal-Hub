@@ -13,7 +13,6 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 600
@@ -31,8 +30,6 @@ local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
-local RESET_AHEAD = 10
-local CLICK_INTERVAL = 5
 local GUI_NAME = "SAE_Hub_UI"
 
 local C = {
@@ -56,23 +53,19 @@ local C = {
     BlueBg      = Color3.fromRGB(26, 42, 66),
     Cyan        = Color3.fromRGB(82, 212, 192),
     CyanBg      = Color3.fromRGB(24, 54, 52),
-    Orange      = Color3.fromRGB(244, 164, 72),
-    OrangeBg    = Color3.fromRGB(58, 40, 20),
     Gold        = Color3.fromRGB(244, 204, 92)
 }
 
 local VInfo = {
-    lennon    = {name = "Lennon Hub",  color = C.Purple, bg = C.PurpleBg, icon = "◆"},
-    on        = {name = "ON Hub",      color = C.Blue,   bg = C.BlueBg,   icon = "●"},
-    both      = {name = "Both Hubs",   color = C.Cyan,   bg = C.CyanBg,   icon = "◈"},
-    both_auto = {name = "Both + Auto", color = C.Orange, bg = C.OrangeBg, icon = "⚡"}
+    lennon = {name = "Lennon Hub", color = C.Purple, bg = C.PurpleBg, icon = "◆"},
+    on     = {name = "ON Hub",     color = C.Blue,   bg = C.BlueBg,   icon = "●"},
+    both   = {name = "Both Hubs",  color = C.Cyan,   bg = C.CyanBg,   icon = "◈"}
 }
 
 local VFeatures = {
-    lennon    = {lennon = true,  on = false, auto = true},
-    on        = {lennon = false, on = true,  auto = false},
-    both      = {lennon = true,  on = true,  auto = false},
-    both_auto = {lennon = true,  on = true,  auto = true}
+    lennon = {lennon = true,  on = false},
+    on     = {lennon = false, on = true},
+    both   = {lennon = true,  on = true}
 }
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
@@ -222,9 +215,7 @@ end
 
 local State = {
     hasLennon = false,
-    hasOn = false,
-    hasAuto = false,
-    autoRunning = false
+    hasOn = false
 }
 
 local LoadedHubs = {}
@@ -265,206 +256,6 @@ local function GetGuiContainers()
         if Ok and Hui then table.insert(Containers, Hui) end
     end
     return Containers
-end
-
-local function IsInsideOurGui(Obj)
-    local Current = Obj
-    while Current do
-        if Current.Name == GUI_NAME then return true end
-        Current = Current.Parent
-    end
-    return false
-end
-
-local function IsRoundish(Obj)
-    local Corner = Obj:FindFirstChildOfClass("UICorner")
-    if Corner then
-        local Cr = Corner.CornerRadius
-        if Cr.X.Scale >= 0.4 or Cr.Offset >= 10 then return true end
-    end
-    local Sz = Obj.AbsoluteSize
-    if Sz.X > 0 and Sz.Y > 0 and math.abs(Sz.X - Sz.Y) <= 10 and Sz.X <= 70 then
-        return true
-    end
-    return false
-end
-
-local HighPriorityKeys = {"LOOP", "TELEPORT"}
-local LowPriorityKeys = {"AUTO", "FARM", "TOGGLE", "ENABLE", "START"}
-
-local function FindToggleCandidates()
-    local Cands = {}
-    local Seen = {}
-
-    local function Add(Obj, Priority)
-        if not Obj or Seen[Obj] then return end
-        if not Obj:IsA("TextButton") and not Obj:IsA("ImageButton") then return end
-        if IsInsideOurGui(Obj) then return end
-        Seen[Obj] = true
-        table.insert(Cands, {obj = Obj, priority = Priority})
-    end
-
-    local function MatchAny(Text, Keys)
-        for _, K in ipairs(Keys) do
-            if Text:find(K, 1, true) then return true end
-        end
-        return false
-    end
-
-    for _, Container in ipairs(GetGuiContainers()) do
-        local Ok, Desc = pcall(function() return Container:GetDescendants() end)
-        if Ok and Desc then
-            for _, Obj in ipairs(Desc) do
-                if Obj:IsA("TextLabel") and type(Obj.Text) == "string" and #Obj.Text > 0 then
-                    local Up = Obj.Text:upper()
-                    local Prio = nil
-                    if MatchAny(Up, HighPriorityKeys) then Prio = 1
-                    elseif MatchAny(Up, LowPriorityKeys) then Prio = 2 end
-
-                    if Prio then
-                        local P = Obj.Parent
-                        if P then
-                            for _, Sib in ipairs(P:GetChildren()) do
-                                if (Sib:IsA("TextButton") or Sib:IsA("ImageButton")) and IsRoundish(Sib) then
-                                    Add(Sib, Prio)
-                                end
-                            end
-
-                            local Anc = Obj.Parent
-                            for _ = 1, 4 do
-                                if not Anc then break end
-                                if Anc:IsA("TextButton") or Anc:IsA("ImageButton") then
-                                    Add(Anc, Prio)
-                                    break
-                                end
-                                for _, Sib in ipairs(Anc:GetChildren()) do
-                                    if (Sib:IsA("TextButton") or Sib:IsA("ImageButton")) and IsRoundish(Sib) then
-                                        Add(Sib, Prio)
-                                    end
-                                end
-                                Anc = Anc.Parent
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if #Cands == 0 then
-        for _, Container in ipairs(GetGuiContainers()) do
-            local Ok, Desc = pcall(function() return Container:GetDescendants() end)
-            if Ok and Desc then
-                for _, Obj in ipairs(Desc) do
-                    if Obj:IsA("TextButton") or Obj:IsA("ImageButton") then
-                        local Sz = Obj.AbsoluteSize
-                        if Sz.X > 0 and Sz.X <= 70 and Sz.Y > 0 and Sz.Y <= 70 and IsRoundish(Obj) then
-                            Add(Obj, 3)
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    table.sort(Cands, function(A, B) return A.priority < B.priority end)
-    return Cands
-end
-
-local function ClickButton(Obj)
-    if not Obj or not Obj.Parent or not Obj.Visible then return false end
-
-    local Pos = Obj.AbsolutePosition
-    local Sz = Obj.AbsoluteSize
-    if Sz.X <= 0 or Sz.Y <= 0 then return false end
-
-    local Cx = Pos.X + Sz.X / 2
-    local Cy = Pos.Y + Sz.Y / 2
-
-    local Ok1 = pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(Cx, Cy, 0, true, game, 1)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(Cx, Cy, 0, false, game, 1)
-    end)
-    if Ok1 then
-        task.wait(0.1)
-        return true
-    end
-
-    if firesignal then
-        local Ok2 = pcall(firesignal, Obj.MouseButton1Click)
-        if Ok2 then return true end
-        local Ok3 = pcall(firesignal, Obj.Activated)
-        if Ok3 then return true end
-    end
-
-    local Ok4 = pcall(function() Obj:Activate() end)
-    return Ok4
-end
-
-local function TryClickLennonToggle()
-    local Cands = FindToggleCandidates()
-    if #Cands == 0 then return false end
-    for _, Entry in ipairs(Cands) do
-        if ClickButton(Entry.obj) then return true end
-    end
-    return false
-end
-
-local function ResetCharacter()
-    local Char = LocalPlayer.Character
-    if not Char then return end
-    local Hum = Char:FindFirstChildOfClass("Humanoid")
-    if not Hum or Hum.Health <= 0 then return end
-    pcall(function() Hum.Health = 0 end)
-end
-
-local function GetNextClickTime()
-    local Now = os.time()
-    local Sec = Now % CLICK_INTERVAL
-    local ToNext = (CLICK_INTERVAL - Sec) % CLICK_INTERVAL
-    if ToNext == 0 then ToNext = CLICK_INTERVAL end
-    return Now + ToNext
-end
-
-local function StartLennonAutoClick()
-    if State.autoRunning then return end
-    State.autoRunning = true
-
-    task.spawn(function()
-        local FailCount = 0
-        while State.autoRunning do
-            local Target = GetNextClickTime()
-            local ResetAt = Target - RESET_AHEAD
-
-            local Now = os.time()
-            if ResetAt > Now then task.wait(ResetAt - Now) end
-
-            ResetCharacter()
-
-            Now = os.time()
-            if Target > Now then task.wait(Target - Now) end
-
-            local Ok = TryClickLennonToggle()
-            if Ok then
-                FailCount = 0
-            else
-                FailCount = FailCount + 1
-                if FailCount >= 3 then
-                    Notify("Lennon Hub", "Toggle Not Found", 4)
-                    FailCount = 0
-                end
-                task.wait(1)
-                TryClickLennonToggle()
-            end
-
-            task.wait(0.1)
-        end
-    end)
-end
-
-local function StopLennonAutoClick()
-    State.autoRunning = false
 end
 
 local FriendCache = {ids = nil, time = 0}
@@ -930,7 +721,6 @@ local function ResetStats()
 end
 
 local function GetDisplayVersion()
-    if State.hasLennon and State.hasOn and State.hasAuto then return "both_auto" end
     if State.hasLennon and State.hasOn then return "both" end
     if State.hasLennon then return "lennon" end
     if State.hasOn then return "on" end
@@ -1168,10 +958,6 @@ local function ApplyVersion(Goal)
         TryLoad(ONHUB_URL, "ON Hub")
         State.hasOn = true
     end
-    if F.auto and not State.hasAuto then
-        StartLennonAutoClick()
-        State.hasAuto = true
-    end
 
     local Achieved = GetDisplayVersion()
     if Achieved then WriteSavedVersion(Achieved) end
@@ -1190,8 +976,8 @@ ModalOverlay.Parent = Gui
 
 local Modal = Instance.new("Frame")
 Modal.Name = "Modal"
-Modal.Size = UDim2.new(0, 310, 0, 350)
-Modal.Position = ReadPos(MODAL_POS_FILE, UDim2.new(0.5, -155, 0.5, -175)) or UDim2.new(0.5, -155, 0.5, -175)
+Modal.Size = UDim2.new(0, 310, 0, 290)
+Modal.Position = ReadPos(MODAL_POS_FILE, UDim2.new(0.5, -155, 0.5, -145)) or UDim2.new(0.5, -155, 0.5, -145)
 Modal.BackgroundColor3 = C.Bg
 Modal.BorderSizePixel = 0
 Modal.ZIndex = 51
@@ -1364,10 +1150,9 @@ local function MakeOptionCard(Title, Desc, Order, AccentColor, Icon)
     return Card
 end
 
-local CardLennon   = MakeOptionCard("Lennon Hub",  "Only Lennon Hub",          1, C.Purple, "◆")
-local CardOn       = MakeOptionCard("ON Hub",      "Only ON Hub",              2, C.Blue,   "●")
-local CardBoth     = MakeOptionCard("Both Hubs",   "Lennon + ON Together",     3, C.Cyan,   "◈")
-local CardBothAuto = MakeOptionCard("Both + Auto", "Both + Lennon Auto-Click", 4, C.Orange, "⚡")
+local CardLennon = MakeOptionCard("Lennon Hub", "Only Lennon Hub",       1, C.Purple, "◆")
+local CardOn     = MakeOptionCard("ON Hub",     "Only ON Hub",           2, C.Blue,   "●")
+local CardBoth   = MakeOptionCard("Both Hubs",  "Lennon + ON Together",  3, C.Cyan,   "◈")
 
 local ConfirmHolder = Instance.new("Frame")
 ConfirmHolder.Name = "ConfirmHolder"
@@ -1481,8 +1266,8 @@ local PendingAction = nil
 
 local function ShowPicker()
     ModalOverlay.Visible = true
-    Modal.Size = UDim2.new(0, 310, 0, 350)
-    Modal.Position = ReadPos(MODAL_POS_FILE, UDim2.new(0.5, -155, 0.5, -175)) or UDim2.new(0.5, -155, 0.5, -175)
+    Modal.Size = UDim2.new(0, 310, 0, 290)
+    Modal.Position = ReadPos(MODAL_POS_FILE, UDim2.new(0.5, -155, 0.5, -145)) or UDim2.new(0.5, -155, 0.5, -145)
     OptionsHolder.Visible = true
     ConfirmHolder.Visible = false
     ConfirmButtons.Visible = false
@@ -1519,7 +1304,6 @@ end
 CardLennon.MouseButton1Click:Connect(function() AskVersion("lennon") end)
 CardOn.MouseButton1Click:Connect(function() AskVersion("on") end)
 CardBoth.MouseButton1Click:Connect(function() AskVersion("both") end)
-CardBothAuto.MouseButton1Click:Connect(function() AskVersion("both_auto") end)
 
 ConfirmYes.MouseButton1Click:Connect(function()
     local Action = PendingAction
