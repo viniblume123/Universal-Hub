@@ -6,9 +6,13 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
 
 local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 3600
+local STORAGE_FILE = "sae_visited_servers.json"
+local MAX_PAGES = 10
+local MIN_CANDIDATES = 20
 
 task.spawn(function()
     pcall(function()
@@ -16,51 +20,143 @@ task.spawn(function()
     end)
 end)
 
-local visitedServers = {}
+local function readVisited()
+    local data = {}
+    if isfile and isfile(STORAGE_FILE) then
+        local ok, content = pcall(readfile, STORAGE_FILE)
+        if ok and content then
+            local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+            if ok2 and type(parsed) == "table" then data = parsed end
+        end
+    end
+    local now = os.time()
+    for k, v in pairs(data) do
+        if type(v) ~= "number" or (now - v) >= COOLDOWN_TIME then
+            data[k] = nil
+        end
+    end
+    return data
+end
 
-local function getServerList()
-    local servers = {}
-    local cursor = nil
-    repeat
-        local url = "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=50"
-        if cursor then url = url .. "&cursor=" .. cursor end
-        local s, r = pcall(HttpService.GetAsync, HttpService, url)
-        if s then
-            local d = HttpService:JSONDecode(r)
-            if d and d.data then
-                for _, sv in ipairs(d.data) do
-                    if sv.playing < sv.maxPlayers and sv.id ~= game.JobId then
-                        table.insert(servers, sv)
-                    end
+local function writeVisited(data)
+    if writefile then
+        pcall(writefile, STORAGE_FILE, HttpService:JSONEncode(data))
+    end
+end
+
+local visited = readVisited()
+visited[game.JobId] = os.time()
+writeVisited(visited)
+
+local function isBlocked(jobId)
+    local t = visited[jobId]
+    if not t then return false end
+    if (os.time() - t) >= COOLDOWN_TIME then
+        visited[jobId] = nil
+        writeVisited(visited)
+        return false
+    end
+    return true
+end
+
+local function markVisited(jobId)
+    if jobId and jobId ~= "" then
+        visited[jobId] = os.time()
+        writeVisited(visited)
+    end
+end
+
+local function httpGet(url)
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and res and res ~= "" then return res end
+    ok, res = pcall(function() return HttpService:GetAsync(url) end)
+    if ok then return res end
+    return nil
+end
+
+local function postJson(url, body)
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return nil end
+    local ok, res = pcall(req, {
+        Url = url,
+        Method = "POST",
+        Body = body,
+        Headers = {["Content-Type"] = "application/json"}
+    })
+    if ok and res and res.Body then return res.Body end
+    return nil
+end
+
+local function getFriendGameIds()
+    local ids = {}
+    local res = httpGet("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends")
+    if not res then return ids end
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+    if not ok or not data or not data.data then return ids end
+    local list = {}
+    for _, f in ipairs(data.data) do table.insert(list, f.id) end
+    if #list == 0 then return ids end
+    for i = 1, #list, 100 do
+        local batch = {}
+        for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
+        local body = HttpService:JSONEncode({userIds = batch})
+        local presRes = postJson("https://presence.roblox.com/v1/presence/users", body)
+        if presRes then
+            local ok2, pres = pcall(HttpService.JSONDecode, HttpService, presRes)
+            if ok2 and pres and pres.userPresences then
+                for _, p in ipairs(pres.userPresences) do
+                    if p.gameId and p.gameId ~= "" then ids[p.gameId] = true end
                 end
             end
-            cursor = d.nextPageCursor
-        else
-            break
         end
-    until not cursor
-    return servers
-end
-
-local function filterVisited(servers)
-    local f = {}
-    local t = os.time()
-    for _, sv in ipairs(servers) do
-        local lv = visitedServers[sv.id]
-        if not lv or (t - lv) >= COOLDOWN_TIME then table.insert(f, sv) end
     end
-    return f
+    return ids
 end
 
-local function markVisited(id)
-    if id and id ~= "" then visitedServers[id] = os.time() end
+local function fetchPage(cursor)
+    local url = "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=100"
+    if cursor and cursor ~= "" then url = url .. "&cursor=" .. cursor end
+    local res = httpGet(url)
+    if not res then return nil end
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+    if not ok or type(data) ~= "table" then return nil end
+    return data
+end
+
+local function findBestServer()
+    local friendIds = getFriendGameIds()
+    local candidates = {}
+    local cursor = nil
+    local pages = 0
+    while pages < MAX_PAGES do
+        pages = pages + 1
+        local data = fetchPage(cursor)
+        if not data or not data.data then break end
+        for _, sv in ipairs(data.data) do
+            if sv.id and sv.id ~= game.JobId
+                and sv.playing < sv.maxPlayers
+                and not isBlocked(sv.id)
+                and not friendIds[sv.id] then
+                table.insert(candidates, sv)
+            end
+        end
+        cursor = data.nextPageCursor
+        if not cursor or cursor == "" then break end
+        if #candidates >= MIN_CANDIDATES then break end
+    end
+    if #candidates == 0 then return nil end
+    table.sort(candidates, function(a, b)
+        if a.playing ~= b.playing then return a.playing < b.playing end
+        return (a.ping or 999) < (b.ping or 999)
+    end)
+    local poolSize = math.min(5, #candidates)
+    return candidates[math.random(1, poolSize)]
 end
 
 local Gui = Instance.new("ScreenGui")
 Gui.Name = "SAE_" .. tostring(math.random(100000, 999999))
 Gui.ResetOnSpawn = false
 Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
 pcall(function()
     if gethui then
         Gui.Parent = gethui()
@@ -71,109 +167,154 @@ pcall(function()
         Gui.Parent = CoreGui
     end
 end)
-
 if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
-local function makeBtn(text, pos, color)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 180, 0, 45)
-    b.Position = pos
-    b.BackgroundColor3 = color or Color3.fromRGB(30, 30, 30)
-    b.Text = text
-    b.TextColor3 = Color3.fromRGB(220, 220, 220)
-    b.TextSize = 15
-    b.Font = Enum.Font.GothamBold
-    b.BorderSizePixel = 0
-    b.AutoButtonColor = false
-    b.Active = true
-    b.Parent = Gui
+local panel = Instance.new("Frame")
+panel.Name = "Panel"
+panel.Size = UDim2.new(0, 230, 0, 128)
+panel.Position = UDim2.new(0.5, -115, 0.78, 0)
+panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+panel.BorderSizePixel = 0
+panel.Parent = Gui
 
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 8)
-    c.Parent = b
+local panelCorner = Instance.new("UICorner")
+panelCorner.CornerRadius = UDim.new(0, 16)
+panelCorner.Parent = panel
 
-    local s = Instance.new("UIStroke")
-    s.Color = Color3.fromRGB(80, 80, 80)
-    s.Thickness = 1.5
-    s.Parent = b
+local panelGradient = Instance.new("UIGradient")
+panelGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(34, 34, 48)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(14, 14, 20))
+}
+panelGradient.Rotation = 135
+panelGradient.Parent = panel
 
-    return b
-end
+local panelStroke = Instance.new("UIStroke")
+panelStroke.Color = Color3.fromRGB(85, 85, 120)
+panelStroke.Thickness = 1.2
+panelStroke.Transparency = 0.4
+panelStroke.Parent = panel
 
-local function makeDraggable(btn, onClick)
-    local dragging = false
-    local dragStart = nil
-    local startPos = nil
-    local didDrag = false
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -40, 0, 24)
+titleLabel.Position = UDim2.new(0, 16, 0, 6)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "SAE Hub"
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 14
+titleLabel.TextColor3 = Color3.fromRGB(232, 232, 248)
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = panel
 
-    btn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            didDrag = false
-            dragStart = input.Position
-            startPos = btn.Position
-        end
-    end)
+local statusDot = Instance.new("Frame")
+statusDot.Size = UDim2.new(0, 8, 0, 8)
+statusDot.Position = UDim2.new(1, -22, 0, 14)
+statusDot.BackgroundColor3 = Color3.fromRGB(90, 220, 140)
+statusDot.BorderSizePixel = 0
+statusDot.Parent = panel
 
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            if math.abs(d.X) > 3 or math.abs(d.Y) > 3 then
-                didDrag = true
-                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-            end
-        end
-    end)
+local dotCorner = Instance.new("UICorner")
+dotCorner.CornerRadius = UDim.new(1, 0)
+dotCorner.Parent = statusDot
 
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            if dragging and not didDrag then
-                onClick()
-            end
-            dragging = false
-            didDrag = false
-        end
-    end)
-end
-
-local hopBtn = makeBtn("Server Hop", UDim2.new(0.5, -90, 0.85, 0))
-
-makeDraggable(hopBtn, function()
-    if hopBtn:GetAttribute("Hop") then return end
-    hopBtn:SetAttribute("Hop", true)
-    hopBtn.Text = "Procurando..."
-
-    if not pcall(HttpService.GetAsync, HttpService, "https://httpbin.org/get") then
-        hopBtn.Text = "HTTP off"
-        task.wait(2)
-        hopBtn.Text = "Server Hop"
-        hopBtn:SetAttribute("Hop", false)
-        return
-    end
-
-    local servers = getServerList()
-    if #servers == 0 then
-        hopBtn.Text = "Sem servidor"
-        task.wait(2)
-        hopBtn.Text = "Server Hop"
-        hopBtn:SetAttribute("Hop", false)
-        return
-    end
-
-    local av = filterVisited(servers)
-    if #av == 0 then av = servers end
-    local chosen = av[math.random(1, #av)]
-    markVisited(chosen.id)
-
-    hopBtn.Text = "Entrando..."
-    pcall(function()
-        TeleportService:TeleportToPlaceInstance(PLACE_ID, chosen.id, LocalPlayer)
-    end)
-    hopBtn:SetAttribute("Hop", false)
-end)
+local dragArea = Instance.new("TextButton")
+dragArea.Size = UDim2.new(1, 0, 0, 30)
+dragArea.Position = UDim2.new(0, 0, 0, 0)
+dragArea.BackgroundTransparency = 1
+dragArea.Text = ""
+dragArea.AutoButtonColor = false
+dragArea.Parent = panel
 
 local persistOn = false
-local persistBtn = makeBtn("Auto-Exec: OFF", UDim2.new(0.5, -90, 0.75, 0))
+
+local function makeBtn(text, yPos, isToggle)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -20, 0, 34)
+    btn.Position = UDim2.new(0, 10, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(225, 225, 240)
+    btn.Font = Enum.Font.GothamMedium
+    btn.TextSize = 13
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = panel
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 9)
+    c.Parent = btn
+
+    local s = Instance.new("UIStroke")
+    s.Color = Color3.fromRGB(70, 70, 95)
+    s.Thickness = 1
+    s.Transparency = 0.4
+    s.Parent = btn
+
+    btn.MouseEnter:Connect(function()
+        if isToggle and persistOn then return end
+        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(44, 44, 62)}):Play()
+        TweenService:Create(s, TweenInfo.new(0.15), {Color = Color3.fromRGB(120, 130, 230), Transparency = 0}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        if isToggle and persistOn then
+            TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
+            TweenService:Create(s, TweenInfo.new(0.15), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
+            return
+        end
+        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
+        TweenService:Create(s, TweenInfo.new(0.15), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
+    end)
+
+    return btn, s
+end
+
+local hopBtn = makeBtn("Server Hop", 38, false)
+local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 78, true)
+
+local dragging = false
+local dragStart, startPos
+dragArea.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = panel.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+local hopBusy = false
+hopBtn.MouseButton1Click:Connect(function()
+    if hopBusy then return end
+    hopBusy = true
+    hopBtn.Text = "Procurando..."
+    task.spawn(function()
+        local server = findBestServer()
+        if not server then
+            hopBtn.Text = "Sem servidores"
+            task.wait(2)
+            hopBtn.Text = "Server Hop"
+            hopBusy = false
+            return
+        end
+        markVisited(server.id)
+        hopBtn.Text = "Entrando..."
+        task.wait(0.4)
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, LocalPlayer)
+        end)
+        hopBusy = false
+    end)
+end)
 
 local queueFunc = queue_on_teleport
     or (syn and syn.queue_on_teleport)
@@ -181,11 +322,9 @@ local queueFunc = queue_on_teleport
     or queueonteleport
 
 local function setQueue(code)
-    if queueFunc then
-        pcall(function() queueFunc(code) end)
-        return true
-    end
-    return false
+    if not queueFunc then return false end
+    pcall(function() queueFunc(code) end)
+    return true
 end
 
 if queueFunc then
@@ -196,34 +335,30 @@ if queueFunc then
     end)
 end
 
-makeDraggable(persistBtn, function()
+persistBtn.MouseButton1Click:Connect(function()
     if not persistOn then
         if SCRIPT_URL == "" then
             persistBtn.Text = "Configure URL"
             task.wait(2)
-            persistBtn.Text = "Auto-Exec: OFF"
+            persistBtn.Text = "Auto-Exec  OFF"
             return
         end
-
         local code = "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
         if setQueue(code) then
             persistOn = true
-            persistBtn.Text = "Auto-Exec: ON"
-            persistBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 0)
+            persistBtn.Text = "Auto-Exec  ON"
+            TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
+            TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
         else
             persistBtn.Text = "Sem suporte"
             task.wait(2)
-            persistBtn.Text = "Auto-Exec: OFF"
+            persistBtn.Text = "Auto-Exec  OFF"
         end
     else
         setQueue("")
         persistOn = false
-        persistBtn.Text = "Auto-Exec: OFF"
-        persistBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        persistBtn.Text = "Auto-Exec  OFF"
+        TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
+        TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
     end
-end)
-
-task.spawn(function()
-    task.wait(2)
-    markVisited(game.JobId)
 end)
