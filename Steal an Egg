@@ -1,3 +1,5 @@
+local LENNON_URL = "https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/main/stealaneggv2"
+local ANTISAE_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/anti%20(steal%20an%20egg)"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 local Players = game:GetService("Players")
@@ -13,19 +15,18 @@ local COOLDOWN_TIME = 600
 local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
 local TELEPORT_FILE = "sae_last_teleport.json"
-local POS_FILE = "sae_pos.json"
-local TELEPORT_COOLDOWN = 15
+local UI_POS_FILE = "sae_ui_pos.json"
+local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
 
-local GENV = (getgenv and getgenv()) or _G
-local INSTANCE_ID = (GENV.SAE_INSTANCE_ID or 0) + 1
-GENV.SAE_INSTANCE_ID = INSTANCE_ID
-
-if GENV.SAE_GUI and typeof(GENV.SAE_GUI) == "Instance" and GENV.SAE_GUI.Parent then
-    pcall(function() GENV.SAE_GUI:Destroy() end)
-end
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
+end)
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet(ANTISAE_URL))() end)
+end)
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
 
@@ -121,19 +122,26 @@ local function writeLastTeleport(t)
     if writefile then pcall(writefile, TELEPORT_FILE, HttpService:JSONEncode({t = t})) end
 end
 
-local function readPos()
-    if not isfile or not isfile(POS_FILE) then return nil, nil end
-    local ok, content = pcall(readfile, POS_FILE)
-    if not ok or not content then return nil, nil end
+local function readUIPos()
+    if not isfile or not isfile(UI_POS_FILE) then return nil end
+    local ok, content = pcall(readfile, UI_POS_FILE)
+    if not ok or not content then return nil end
     local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" and type(parsed.x) == "number" and type(parsed.y) == "number" then
-        return parsed.x, parsed.y
+    if ok2 and type(parsed) == "table"
+        and type(parsed.xs) == "number" and type(parsed.xo) == "number"
+        and type(parsed.ys) == "number" and type(parsed.yo) == "number" then
+        return UDim2.new(parsed.xs, parsed.xo, parsed.ys, parsed.yo)
     end
-    return nil, nil
+    return nil
 end
 
-local function writePos(x, y)
-    if writefile then pcall(writefile, POS_FILE, HttpService:JSONEncode({x = x, y = y})) end
+local function writeUIPos(pos)
+    if writefile then
+        pcall(writefile, UI_POS_FILE, HttpService:JSONEncode({
+            xs = pos.X.Scale, xo = pos.X.Offset,
+            ys = pos.Y.Scale, yo = pos.Y.Offset
+        }))
+    end
 end
 
 local friendCache = {ids = nil, time = 0}
@@ -248,8 +256,15 @@ local function findBestServer()
     return nil
 end
 
+if getgenv then
+    local prev = getgenv().SAE_Gui
+    if prev and typeof(prev) == "Instance" and prev.Parent then
+        pcall(function() prev:Destroy() end)
+    end
+end
+
 local Gui = Instance.new("ScreenGui")
-Gui.Name = "SAE_Hub_" .. tostring(math.random(100000, 999999))
+Gui.Name = "SAE_" .. tostring(math.random(100000, 999999))
 Gui.ResetOnSpawn = false
 Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function()
@@ -263,17 +278,13 @@ pcall(function()
     end
 end)
 if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
-GENV.SAE_GUI = Gui
+if getgenv then getgenv().SAE_Gui = Gui end
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
 panel.Size = UDim2.new(0, 230, 0, 128)
-local savedX, savedY = readPos()
-if savedX and savedY then
-    panel.Position = UDim2.new(0, savedX, 0, savedY)
-else
-    panel.Position = UDim2.new(0.5, -115, 0.78, 0)
-end
+local savedPos = readUIPos()
+panel.Position = savedPos or UDim2.new(0.5, -115, 0.78, 0)
 panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 panel.BorderSizePixel = 0
 panel.Parent = Gui
@@ -390,7 +401,7 @@ end)
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         if dragging then
-            writePos(panel.Position.X.Offset, panel.Position.Y.Offset)
+            writeUIPos(panel.Position)
         end
         dragging = false
     end
@@ -402,7 +413,6 @@ local function waitTeleportCooldown()
     if elapsed < TELEPORT_COOLDOWN then
         local remaining = TELEPORT_COOLDOWN - elapsed
         for i = remaining, 1, -1 do
-            if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then return end
             hopBtn.Text = "Aguardando " .. i .. "s..."
             task.wait(1)
         end
@@ -417,17 +427,14 @@ hopBtn.MouseButton1Click:Connect(function()
     task.spawn(function()
         hopBtn.Text = "Procurando..."
 
-        while hopBusy and GENV.SAE_INSTANCE_ID == INSTANCE_ID do
+        while hopBusy do
             waitTeleportCooldown()
-            if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then break end
 
             local server = findBestServer()
             if not server then
                 task.wait(0.5)
                 server = findBestServer()
             end
-
-            if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then break end
 
             if server then
                 markVisited(server.id)
@@ -450,9 +457,7 @@ hopBtn.MouseButton1Click:Connect(function()
             end
         end
 
-        if GENV.SAE_INSTANCE_ID == INSTANCE_ID then
-            hopBtn.Text = "Server Hop"
-        end
+        hopBtn.Text = "Server Hop"
     end)
 end)
 
