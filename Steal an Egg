@@ -15,11 +15,12 @@ local COOLDOWN_TIME = 600
 local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
 local TELEPORT_FILE = "sae_last_teleport.json"
-local UI_POS_FILE = "sae_ui_pos.json"
+local POS_FILE = "sae_ui_pos.json"
 local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
+local GUI_NAME = "SAE_Hub_UI"
 
 task.spawn(function()
     pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
@@ -122,24 +123,22 @@ local function writeLastTeleport(t)
     if writefile then pcall(writefile, TELEPORT_FILE, HttpService:JSONEncode({t = t})) end
 end
 
-local function readUIPos()
-    if not isfile or not isfile(UI_POS_FILE) then return nil end
-    local ok, content = pcall(readfile, UI_POS_FILE)
+local function readPos()
+    if not isfile or not isfile(POS_FILE) then return nil end
+    local ok, content = pcall(readfile, POS_FILE)
     if not ok or not content then return nil end
     local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table"
-        and type(parsed.xs) == "number" and type(parsed.xo) == "number"
-        and type(parsed.ys) == "number" and type(parsed.yo) == "number" then
-        return UDim2.new(parsed.xs, parsed.xo, parsed.ys, parsed.yo)
+    if ok2 and type(parsed) == "table" and type(parsed.x) == "number" and type(parsed.y) == "number" then
+        return UDim2.new(parsed.xs or 0.5, parsed.x, parsed.ys or 0.78, parsed.y)
     end
     return nil
 end
 
-local function writeUIPos(pos)
+local function writePos(pos)
     if writefile then
-        pcall(writefile, UI_POS_FILE, HttpService:JSONEncode({
-            xs = pos.X.Scale, xo = pos.X.Offset,
-            ys = pos.Y.Scale, yo = pos.Y.Offset
+        pcall(writefile, POS_FILE, HttpService:JSONEncode({
+            xs = pos.X.Scale, x = pos.X.Offset,
+            ys = pos.Y.Scale, y = pos.Y.Offset
         }))
     end
 end
@@ -256,35 +255,43 @@ local function findBestServer()
     return nil
 end
 
-if getgenv then
-    local prev = getgenv().SAE_Gui
-    if prev and typeof(prev) == "Instance" and prev.Parent then
-        pcall(function() prev:Destroy() end)
+pcall(function()
+    local parents = {CoreGui}
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then table.insert(parents, pg) end
+    if gethui then
+        local ok, hui = pcall(gethui)
+        if ok and hui then table.insert(parents, hui) end
     end
-end
+    for _, p in ipairs(parents) do
+        if p then
+            local old = p:FindFirstChild(GUI_NAME)
+            if old then pcall(function() old:Destroy() end) end
+        end
+    end
+end)
 
 local Gui = Instance.new("ScreenGui")
-Gui.Name = "SAE_" .. tostring(math.random(100000, 999999))
+Gui.Name = GUI_NAME
 Gui.ResetOnSpawn = false
 Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function()
     if gethui then
-        Gui.Parent = gethui()
-    elseif syn and syn.protect_gui then
+        local ok, hui = pcall(gethui)
+        if ok and hui then Gui.Parent = hui end
+    end
+    if not Gui.Parent and syn and syn.protect_gui then
         syn.protect_gui(Gui)
         Gui.Parent = CoreGui
-    else
-        Gui.Parent = CoreGui
     end
+    if not Gui.Parent then Gui.Parent = CoreGui end
 end)
 if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
-if getgenv then getgenv().SAE_Gui = Gui end
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
 panel.Size = UDim2.new(0, 230, 0, 128)
-local savedPos = readUIPos()
-panel.Position = savedPos or UDim2.new(0.5, -115, 0.78, 0)
+panel.Position = readPos() or UDim2.new(0.5, -115, 0.78, 0)
 panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 panel.BorderSizePixel = 0
 panel.Parent = Gui
@@ -401,9 +408,9 @@ end)
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         if dragging then
-            writeUIPos(panel.Position)
+            dragging = false
+            writePos(panel.Position)
         end
-        dragging = false
     end
 end)
 
@@ -430,10 +437,13 @@ hopBtn.MouseButton1Click:Connect(function()
         while hopBusy do
             waitTeleportCooldown()
 
-            local server = findBestServer()
+            local okFind, server = pcall(findBestServer)
+            if not okFind then server = nil end
+
             if not server then
                 task.wait(0.5)
-                server = findBestServer()
+                local okFind2, server2 = pcall(findBestServer)
+                if okFind2 then server = server2 end
             end
 
             if server then
