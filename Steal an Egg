@@ -1,4 +1,5 @@
 local LENNON_URL = "https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/main/stealaneggv2"
+local ANTIAFK_URL = "https://rawscripts.net/raw/Universal-Script-AntiAFK-script-18076"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 local Players = game:GetService("Players")
@@ -10,14 +11,17 @@ local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 
 local PLACE_ID = game.PlaceId
-local COOLDOWN_TIME = 3600
+local COOLDOWN_TIME = 600
 local STORAGE_FILE = "sae_visited_servers.json"
-local MAX_PAGES = 10
+local AUTOEXEC_FILE = "sae_autoexec.json"
+local MAX_PAGES = 12
+local FRIEND_CACHE_TIME = 300
 
 task.spawn(function()
-    pcall(function()
-        loadstring(game:HttpGet(LENNON_URL))()
-    end)
+    pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
+end)
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet(ANTIAFK_URL))() end)
 end)
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
@@ -34,6 +38,16 @@ local function httpGet(url)
     return nil
 end
 
+local function httpGetRetry(url, tries)
+    tries = tries or 3
+    for i = 1, tries do
+        local res = httpGet(url)
+        if res and res ~= "" then return res end
+        if i < tries then task.wait(0.3) end
+    end
+    return nil
+end
+
 local function readVisited()
     local data = {}
     if isfile and isfile(STORAGE_FILE) then
@@ -45,17 +59,13 @@ local function readVisited()
     end
     local now = os.time()
     for k, v in pairs(data) do
-        if type(v) ~= "number" or (now - v) >= COOLDOWN_TIME then
-            data[k] = nil
-        end
+        if type(v) ~= "number" or (now - v) >= COOLDOWN_TIME then data[k] = nil end
     end
     return data
 end
 
 local function writeVisited(data)
-    if writefile then
-        pcall(writefile, STORAGE_FILE, HttpService:JSONEncode(data))
-    end
+    if writefile then pcall(writefile, STORAGE_FILE, HttpService:JSONEncode(data)) end
 end
 
 local visited = readVisited()
@@ -80,57 +90,81 @@ local function markVisited(jobId)
     end
 end
 
+local function readAutoExec()
+    if not isfile or not isfile(AUTOEXEC_FILE) then return false end
+    local ok, content = pcall(readfile, AUTOEXEC_FILE)
+    if not ok or not content then return false end
+    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok2 and type(parsed) == "table" then return parsed.on == true end
+    return false
+end
+
+local function writeAutoExec(on)
+    if writefile then pcall(writefile, AUTOEXEC_FILE, HttpService:JSONEncode({on = on})) end
+end
+
+local friendCache = {ids = nil, time = 0}
+
 local function getFriendGameIds()
+    if friendCache.ids and (os.time() - friendCache.time) < FRIEND_CACHE_TIME then
+        return friendCache.ids
+    end
     local ids = {}
-    if not REQUEST then return ids end
-    local res = httpGet("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends")
-    if not res then return ids end
-    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-    if not ok or not data or not data.data then return ids end
-    local list = {}
-    for _, f in ipairs(data.data) do table.insert(list, f.id) end
-    if #list == 0 then return ids end
-    for i = 1, #list, 100 do
-        local batch = {}
-        for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
-        local body = HttpService:JSONEncode({userIds = batch})
-        local ok2, res2 = pcall(REQUEST, {
-            Url = "https://presence.roblox.com/v1/presence/users",
-            Method = "POST",
-            Body = body,
-            Headers = {["Content-Type"] = "application/json"}
-        })
-        if ok2 and res2 and res2.Body then
-            local ok3, pres = pcall(HttpService.JSONDecode, HttpService, res2.Body)
-            if ok3 and pres and pres.userPresences then
-                for _, p in ipairs(pres.userPresences) do
-                    if p.gameId and p.gameId ~= "" then ids[p.gameId] = true end
+    if REQUEST then
+        local res = httpGetRetry("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends", 2)
+        if res then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+            if ok and data and data.data then
+                local list = {}
+                for _, f in ipairs(data.data) do table.insert(list, f.id) end
+                for i = 1, #list, 100 do
+                    local batch = {}
+                    for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
+                    local body = HttpService:JSONEncode({userIds = batch})
+                    local ok2, res2 = pcall(REQUEST, {
+                        Url = "https://presence.roblox.com/v1/presence/users",
+                        Method = "POST",
+                        Body = body,
+                        Headers = {["Content-Type"] = "application/json"}
+                    })
+                    if ok2 and res2 and res2.Body then
+                        local ok3, pres = pcall(HttpService.JSONDecode, HttpService, res2.Body)
+                        if ok3 and pres and pres.userPresences then
+                            for _, p in ipairs(pres.userPresences) do
+                                if p.gameId and p.gameId ~= "" then ids[p.gameId] = true end
+                            end
+                        end
+                    end
                 end
             end
         end
     end
+    friendCache.ids = ids
+    friendCache.time = os.time()
     return ids
 end
 
-local function fetchPage(cursor)
-    local url = "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=100"
+local function fetchPage(cursor, sortOrder)
+    sortOrder = sortOrder or "Asc"
+    local url = "https://games.roblox.com/v1/games/" .. PLACE_ID ..
+                "/servers/Public?sortOrder=" .. sortOrder .. "&limit=100"
     if cursor and cursor ~= "" then
         url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
     end
-    local res = httpGet(url)
+    local res = httpGetRetry(url, 3)
     if not res then return nil end
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
     if not ok or type(data) ~= "table" then return nil end
     return data
 end
 
-local function collectCandidates(filterFn, friendIds)
+local function collectCandidates(filterFn, friendIds, sortOrder)
     local candidates = {}
     local cursor = nil
     local pages = 0
     while pages < MAX_PAGES do
         pages = pages + 1
-        local data = fetchPage(cursor)
+        local data = fetchPage(cursor, sortOrder)
         if not data or not data.data then break end
         for _, sv in ipairs(data.data) do
             if sv.id and sv.id ~= game.JobId and sv.playing < sv.maxPlayers then
@@ -141,6 +175,7 @@ local function collectCandidates(filterFn, friendIds)
         end
         cursor = data.nextPageCursor
         if not cursor or cursor == "" then break end
+        if #candidates >= 25 then break end
     end
     return candidates
 end
@@ -156,18 +191,26 @@ end
 
 local function findBestServer()
     local friendIds = getFriendGameIds()
-    local strict = collectCandidates(function(sv, f)
-        return not isBlocked(sv.id) and not f[sv.id]
-    end, friendIds)
-    if #strict > 0 then return pickBest(strict) end
+    local orders = {"Asc", "Desc"}
 
-    local ignoreVisited = collectCandidates(function(sv, f)
-        return not f[sv.id]
-    end, friendIds)
-    if #ignoreVisited > 0 then return pickBest(ignoreVisited) end
+    for _, order in ipairs(orders) do
+        local c = collectCandidates(function(sv, f)
+            return not isBlocked(sv.id) and not f[sv.id]
+        end, friendIds, order)
+        if #c > 0 then return pickBest(c) end
+    end
 
-    local anyPublic = collectCandidates(function() return true end, friendIds)
-    if #anyPublic > 0 then return pickBest(anyPublic) end
+    for _, order in ipairs(orders) do
+        local c = collectCandidates(function(sv, f)
+            return not f[sv.id]
+        end, friendIds, order)
+        if #c > 0 then return pickBest(c) end
+    end
+
+    for _, order in ipairs(orders) do
+        local c = collectCandidates(function() return true end, friendIds, order)
+        if #c > 0 then return pickBest(c) end
+    end
 
     return nil
 end
@@ -245,7 +288,6 @@ dragArea.AutoButtonColor = false
 dragArea.Parent = panel
 
 local persistOn = false
-local teleportConn = nil
 
 local function makeBtn(text, yPos, isToggle)
     local btn = Instance.new("TextButton")
@@ -320,6 +362,10 @@ hopBtn.MouseButton1Click:Connect(function()
     task.spawn(function()
         local server = findBestServer()
         if not server then
+            task.wait(1)
+            server = findBestServer()
+        end
+        if not server then
             hopBtn.Text = "Sem servidores"
             task.wait(2)
             hopBtn.Text = "Server Hop"
@@ -341,48 +387,38 @@ local queueFunc = queue_on_teleport
     or (fluxus and fluxus.queue_on_teleport)
     or queueonteleport
 
-local function setQueue(code)
-    if not queueFunc then return false end
-    pcall(function() queueFunc(code) end)
-    return true
+local function applyAutoExecVisual(on)
+    if on then
+        persistBtn.Text = "Auto-Exec  ON"
+        TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
+        TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
+    else
+        persistBtn.Text = "Auto-Exec  OFF"
+        TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
+        TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
+    end
 end
 
 local function enableAutoExec()
-    if SCRIPT_URL == "" then return false end
-    if not queueFunc then return false end
+    if SCRIPT_URL == "" or not queueFunc then return false end
     local code = "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
-    if not setQueue(code) then return false end
-    if teleportConn then teleportConn:Disconnect() end
-    teleportConn = LocalPlayer.OnTeleport:Connect(function()
-        if persistOn then
-            setQueue(code)
-        end
-    end)
+    local ok = pcall(function() queueFunc(code) end)
+    if not ok then return false end
+    persistOn = true
+    writeAutoExec(true)
     return true
 end
 
 local function disableAutoExec()
-    if teleportConn then
-        teleportConn:Disconnect()
-        teleportConn = nil
-    end
-    setQueue("")
     persistOn = false
+    writeAutoExec(false)
+    if queueFunc then pcall(function() queueFunc("") end) end
 end
 
 persistBtn.MouseButton1Click:Connect(function()
     if not persistOn then
-        if SCRIPT_URL == "" then
-            persistBtn.Text = "Configure URL"
-            task.wait(2)
-            persistBtn.Text = "Auto-Exec  OFF"
-            return
-        end
         if enableAutoExec() then
-            persistOn = true
-            persistBtn.Text = "Auto-Exec  ON"
-            TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
-            TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
+            applyAutoExecVisual(true)
         else
             persistBtn.Text = "Sem suporte"
             task.wait(2)
@@ -390,11 +426,15 @@ persistBtn.MouseButton1Click:Connect(function()
         end
     else
         disableAutoExec()
-        persistBtn.Text = "Auto-Exec  OFF"
-        TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
-        TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
+        applyAutoExecVisual(false)
     end
 end)
+
+if readAutoExec() then
+    if enableAutoExec() then
+        applyAutoExecVisual(true)
+    end
+end
 
 task.spawn(function()
     task.wait(2)
