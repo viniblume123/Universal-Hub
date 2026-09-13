@@ -1,0 +1,257 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character
+local humanoid
+local rootPart
+local connections = {}
+
+local savedWalkSpeed = 16
+local savedJumpPower = 50
+local savedJumpHeight = 7.2
+
+local MAX_VELOCITY = 120
+local HEARTBEAT_STATE_CHECK = 0.5
+local PROMPT_SCAN_INTERVAL = 2
+
+local function disconnectAll()
+	for _, c in ipairs(connections) do
+		pcall(function()
+			c:Disconnect()
+		end)
+	end
+	table.clear(connections)
+end
+
+local function addConn(c)
+	table.insert(connections, c)
+end
+
+local function setupPrompt(d)
+	if d:IsA("ProximityPrompt") then
+		pcall(function()
+			d.HoldDuration = 0
+			d.RequiresLineOfSight = false
+		end)
+	elseif d:IsA("ClickDetector") then
+		pcall(function()
+			d.MaxActivationDistance = math.max(d.MaxActivationDistance, 32)
+		end)
+	end
+end
+
+for _, d in ipairs(workspace:GetDescendants()) do
+	setupPrompt(d)
+end
+
+workspace.DescendantAdded:Connect(setupPrompt)
+
+task.spawn(function()
+	while task.wait(PROMPT_SCAN_INTERVAL) do
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if d:IsA("ProximityPrompt") and d.HoldDuration > 0 then
+				pcall(function()
+					d.HoldDuration = 0
+				end)
+			end
+		end
+	end
+end)
+
+local function cleanRagdollAndJoints()
+	if not character or not character.Parent then
+		return
+	end
+	for _, d in ipairs(character:GetDescendants()) do
+		if d:IsA("BallSocketConstraint") then
+			pcall(function()
+				d:Destroy()
+			end)
+		elseif d:IsA("Motor6D") and not d.Enabled then
+			pcall(function()
+				d.Enabled = true
+			end)
+		elseif d:IsA("Attachment") then
+			local n = string.lower(d.Name)
+			if string.find(n, "ragdoll", 1, true) or string.find(n, "fling", 1, true) then
+				pcall(function()
+					d:Destroy()
+				end)
+			end
+		end
+	end
+end
+
+local function setup(char)
+	disconnectAll()
+	character = char
+	humanoid = char:WaitForChild("Humanoid")
+	rootPart = char:WaitForChild("HumanoidRootPart")
+
+	savedWalkSpeed = humanoid.WalkSpeed > 0.01 and humanoid.WalkSpeed or 16
+	savedJumpPower = humanoid.JumpPower > 0.01 and humanoid.JumpPower or 50
+	savedJumpHeight = humanoid.JumpHeight > 0.01 and humanoid.JumpHeight or 7.2
+
+	pcall(function()
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
+	end)
+
+	addConn(character.DescendantAdded:Connect(function(desc)
+		if desc:IsA("BallSocketConstraint") then
+			task.defer(function()
+				pcall(function()
+					desc:Destroy()
+				end)
+			end)
+		elseif desc:IsA("Motor6D") then
+			task.defer(function()
+				pcall(function()
+					desc.Enabled = true
+				end)
+			end)
+		elseif desc:IsA("Attachment") then
+			local n = string.lower(desc.Name)
+			if string.find(n, "ragdoll", 1, true) or string.find(n, "fling", 1, true) then
+				task.defer(function()
+					pcall(function()
+						desc:Destroy()
+					end)
+				end)
+			end
+		end
+	end))
+
+	addConn(humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+		if humanoid.WalkSpeed <= 0.01 then
+			humanoid.WalkSpeed = savedWalkSpeed > 0.01 and savedWalkSpeed or 16
+		else
+			savedWalkSpeed = humanoid.WalkSpeed
+		end
+	end))
+
+	addConn(humanoid:GetPropertyChangedSignal("JumpPower"):Connect(function()
+		if humanoid.JumpPower <= 0.01 then
+			humanoid.JumpPower = savedJumpPower > 0.01 and savedJumpPower or 50
+		else
+			savedJumpPower = humanoid.JumpPower
+		end
+	end))
+
+	addConn(humanoid:GetPropertyChangedSignal("JumpHeight"):Connect(function()
+		if humanoid.JumpHeight <= 0.01 then
+			humanoid.JumpHeight = savedJumpHeight > 0.01 and savedJumpHeight or 7.2
+		else
+			savedJumpHeight = humanoid.JumpHeight
+		end
+	end))
+
+	addConn(humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
+		if humanoid.PlatformStand then
+			humanoid.PlatformStand = false
+		end
+	end))
+
+	addConn(humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
+		if humanoid.Sit and humanoid.SeatPart == nil then
+			humanoid.Sit = false
+		end
+	end))
+
+	addConn(humanoid.StateChanged:Connect(function(_, newState)
+		if newState == Enum.HumanoidStateType.Physics
+			or newState == Enum.HumanoidStateType.Ragdoll
+			or newState == Enum.HumanoidStateType.FallingDown
+			or newState == Enum.HumanoidStateType.PlatformStanding then
+			pcall(function()
+				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end)
+		end
+	end))
+
+	addConn(rootPart:GetPropertyChangedSignal("Anchored"):Connect(function()
+		if rootPart.Anchored then
+			rootPart.Anchored = false
+		end
+	end))
+
+	local stateAccum = 0
+
+	addConn(RunService.Heartbeat:Connect(function(dt)
+		if not character or not character.Parent then
+			return
+		end
+		if not humanoid or humanoid.Health <= 0 then
+			return
+		end
+		if not rootPart or not rootPart.Parent then
+			return
+		end
+
+		if humanoid.PlatformStand then
+			humanoid.PlatformStand = false
+		end
+
+		local state = humanoid:GetState()
+		if state == Enum.HumanoidStateType.Physics
+			or state == Enum.HumanoidStateType.Ragdoll
+			or state == Enum.HumanoidStateType.FallingDown
+			or state == Enum.HumanoidStateType.PlatformStanding then
+			pcall(function()
+				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end)
+		end
+
+		if humanoid.WalkSpeed <= 0.01 then
+			humanoid.WalkSpeed = savedWalkSpeed > 0.01 and savedWalkSpeed or 16
+		end
+
+		if humanoid.JumpPower <= 0.01 then
+			humanoid.JumpPower = savedJumpPower > 0.01 and savedJumpPower or 50
+		end
+
+		if humanoid.Sit and humanoid.SeatPart == nil then
+			humanoid.Sit = false
+		end
+
+		local vel = rootPart.AssemblyLinearVelocity
+		local speed = vel.Magnitude
+		if speed > MAX_VELOCITY then
+			local moveDir = humanoid.MoveDirection
+			local targetY = math.clamp(vel.Y, -50, 50)
+			if moveDir.Magnitude > 0 then
+				rootPart.AssemblyLinearVelocity = Vector3.new(
+					moveDir.X * savedWalkSpeed,
+					targetY,
+					moveDir.Z * savedWalkSpeed
+				)
+			else
+				rootPart.AssemblyLinearVelocity = Vector3.new(0, targetY, 0)
+			end
+		end
+
+		if rootPart.Anchored then
+			rootPart.Anchored = false
+		end
+
+		local angular = rootPart.AssemblyAngularVelocity
+		if angular.Magnitude > 50 then
+			rootPart.AssemblyAngularVelocity = Vector3.zero
+		end
+
+		stateAccum += dt
+		if stateAccum >= HEARTBEAT_STATE_CHECK then
+			stateAccum = 0
+			cleanRagdollAndJoints()
+		end
+	end))
+end
+
+if player.Character then
+	task.spawn(setup, player.Character)
+end
+
+player.CharacterAdded:Connect(setup)
