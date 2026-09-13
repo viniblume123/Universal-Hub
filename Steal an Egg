@@ -1,7 +1,5 @@
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
-getgenv().SecureMode = true
-
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,6 +21,7 @@ local function Notify(title, content, duration)
     end)
 end
 
+-- Bloqueia apenas o Kick do próprio LocalPlayer (isso é seguro e não é FireServer)
 pcall(function()
     if type(getrawmetatable) == "function" and type(setreadonly) == "function" and type(newcclosure) == "function" then
         local mt = getrawmetatable(game)
@@ -31,14 +30,6 @@ pcall(function()
         mt.__namecall = newcclosure(function(self, ...)
             if not checkcaller() then
                 if getnamecallmethod() == "Kick" and self == LocalPlayer then return nil end
-                local caller = getcallingscript and getcallingscript() or nil
-                if caller then
-                    local n = caller.Name:lower()
-                    if n:find("anti") or n:find("detect") or n:find("guard") then
-                        local m = getnamecallmethod()
-                        if m == "FireServer" or m == "InvokeServer" then return nil end
-                    end
-                end
             end
             return old(self, ...)
         end)
@@ -47,6 +38,7 @@ pcall(function()
     for _, v in pairs(getconnections(LocalPlayer.Idled)) do v:Disable() end
 end)
 
+-- Guard bypass seguro: só marca atributo, NÃO substitui FireServer
 local function ApplyGuardBypass()
     pcall(function()
         local p = ReplicatedStorage:FindFirstChild("Packages")
@@ -58,7 +50,7 @@ local function ApplyGuardBypass()
         for _, r in pairs(g:GetChildren()) do
             if r:IsA("RemoteEvent") and not r:GetAttribute("HB") then
                 r:SetAttribute("HB", true)
-                r.FireServer = function() return nil end
+                -- NADA de FireServer aqui
             end
         end
     end)
@@ -235,28 +227,32 @@ makeDraggable(hopBtn, function()
     hopBtn:SetAttribute("Hop", false)
 end)
 
+-- ===== AUTO-EXEC CORRIGIDO =====
 local persistOn = false
 
 local persistBtn = makeBtn("Auto-Exec: OFF", UDim2.new(0.5, -90, 0.75, 0))
 
+-- Detecta a função de fila disponível no executor
+local queueFunc = queue_on_teleport
+    or (syn and syn.queue_on_teleport)
+    or (fluxus and fluxus.queue_on_teleport)
+    or queueonteleport
+
 local function setQueue(code)
-    if queue_on_teleport then
-        pcall(function() queue_on_teleport(code) end)
-        return true
-    end
-    if syn and syn.queue_on_teleport then
-        pcall(function() syn.queue_on_teleport(code) end)
-        return true
-    end
-    if queueonteleport then
-        pcall(function() queueonteleport(code) end)
-        return true
-    end
-    if type(writefile) == "function" and code ~= "" then
-        pcall(function() writefile("StealAnEgg_AutoExec.lua", code) end)
+    if queueFunc then
+        pcall(function() queueFunc(code) end)
         return true
     end
     return false
+end
+
+-- Reforça a fila sempre que um teleporte acontecer (garante que o auto-exec persista)
+if queueFunc then
+    LocalPlayer.OnTeleport:Connect(function()
+        if persistOn and SCRIPT_URL ~= "" then
+            queueFunc("loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()")
+        end
+    end)
 end
 
 makeDraggable(persistBtn, function()
@@ -279,6 +275,7 @@ makeDraggable(persistBtn, function()
             persistBtn.Text = "Sem suporte"
             task.wait(2)
             persistBtn.Text = "Auto-Exec: OFF"
+            Notify("Auto-Exec", "Seu executor não suporta queue_on_teleport", 4)
         end
     else
         setQueue("")
