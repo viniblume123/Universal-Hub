@@ -18,13 +18,13 @@ local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 600
 local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
+local AUTOEXEC_VERSION_FILE = "sae_autoexec_version.json"
 local TELEPORT_FILE = "sae_last_teleport.json"
 local POS_FILE = "sae_ui_pos.json"
 local MODAL_POS_FILE = "sae_modal_pos.json"
 local CONFIRM_POS_FILE = "sae_confirm_pos.json"
 local STATS_FILE = "sae_stats.json"
 local WAS_AUTO_FILE = "sae_was_auto.json"
-local VERSION_FILE = "sae_version.json"
 local COLLAPSED_FILE = "sae_ui_collapsed.json"
 local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
@@ -157,6 +157,15 @@ local function WriteAutoExec(On) WriteJson(AUTOEXEC_FILE, {on = On}) end
 local function ReadLastTeleport() return ReadJson(TELEPORT_FILE, {t = 0}).t or 0 end
 local function WriteLastTeleport(T) WriteJson(TELEPORT_FILE, {t = T}) end
 
+local function ReadAutoExecVersion()
+    local D = ReadJson(AUTOEXEC_VERSION_FILE, nil)
+    if not D or type(D.version) ~= "string" then return nil end
+    if VInfo[D.version] then return D.version end
+    return nil
+end
+
+local function WriteAutoExecVersion(V) WriteJson(AUTOEXEC_VERSION_FILE, {version = V}) end
+
 local function ReadPos(File, Def)
     local D = ReadJson(File, nil)
     if not D or type(D.x) ~= "number" or type(D.y) ~= "number" then return Def end
@@ -193,15 +202,6 @@ local function ConsumeWasAuto()
     elseif writefile then pcall(writefile, WAS_AUTO_FILE, "0") end
     return true
 end
-
-local function ReadSavedVersion()
-    local D = ReadJson(VERSION_FILE, nil)
-    if not D or type(D.version) ~= "string" then return nil end
-    if VInfo[D.version] then return D.version end
-    return nil
-end
-
-local function WriteSavedVersion(V) WriteJson(VERSION_FILE, {version = V}) end
 
 local WasAuto = ConsumeWasAuto()
 local SESSION_START = os.time()
@@ -873,8 +873,8 @@ local function BuildLoader()
         'if ok2 and type(d) == "table" and d.on == true then ' ..
         'pcall(function() loadstring(game:HttpGet("' .. ANTISAE_URL .. '"))() end) ' ..
         'local v = "on" ' ..
-        'if isfile and isfile("sae_version.json") then ' ..
-        'local o, cc = pcall(readfile, "sae_version.json") ' ..
+        'if isfile and isfile("sae_autoexec_version.json") then ' ..
+        'local o, cc = pcall(readfile, "sae_autoexec_version.json") ' ..
         'if o and cc then ' ..
         'local o2, dd = pcall(H.JSONDecode, H, cc) ' ..
         'if o2 and type(dd) == "table" and type(dd.version) == "string" then v = dd.version end ' ..
@@ -929,23 +929,6 @@ local function DisableAutoExec()
     ArmLoader()
 end
 
-PersistBtn.MouseButton1Click:Connect(function()
-    if not PersistOn then
-        if EnableAutoExec() then
-            ApplyAutoExecVisual(true)
-            Notify("Auto-Exec", "Enabled for This Game", 3)
-        else
-            PersistBtn.Text = "Not Supported"
-            task.wait(2)
-            PersistBtn.Text = "Auto-Exec  Off"
-        end
-    else
-        DisableAutoExec()
-        ApplyAutoExecVisual(false)
-        Notify("Auto-Exec", "Disabled", 3)
-    end
-end)
-
 local function ApplyVersion(Goal)
     local F = VFeatures[Goal]
     if not F then return end
@@ -959,8 +942,6 @@ local function ApplyVersion(Goal)
         State.hasOn = true
     end
 
-    local Achieved = GetDisplayVersion()
-    if Achieved then WriteSavedVersion(Achieved) end
     pcall(RefreshStats)
 end
 
@@ -1261,18 +1242,25 @@ local ConfirmNo  = MakeModalBtn("Cancel",  C.Card,     C.Stroke, 2)
 
 MakeDraggable(Modal, ModalDrag, MODAL_POS_FILE)
 
+local PickerMode = nil
 local PendingVersion = nil
 local PendingAction = nil
 
-local function ShowPicker()
+local function ShowPicker(Mode)
+    PickerMode = Mode or "runtime"
     ModalOverlay.Visible = true
     Modal.Size = UDim2.new(0, 310, 0, 290)
     Modal.Position = ReadPos(MODAL_POS_FILE, UDim2.new(0.5, -155, 0.5, -145)) or UDim2.new(0.5, -155, 0.5, -145)
     OptionsHolder.Visible = true
     ConfirmHolder.Visible = false
     ConfirmButtons.Visible = false
-    ModalTitle.Text = "Choose Your Version"
-    ModalDesc.Text = "Select Which Hub to Load"
+    if PickerMode == "autoexec" then
+        ModalTitle.Text = "Auto-Exec Version"
+        ModalDesc.Text = "Choose Which Hub to Auto-Load"
+    else
+        ModalTitle.Text = "Choose Your Version"
+        ModalDesc.Text = "Select Which Hub to Load"
+    end
     PendingVersion = nil
     PendingAction = nil
 end
@@ -1298,7 +1286,21 @@ local function HideModal()
 end
 
 local function AskVersion(V)
-    ShowConfirm("Are You Sure?", "Use " .. (VInfo[V] and VInfo[V].name or V) .. "?", "version", V)
+    if PickerMode == "autoexec" then
+        ShowConfirm(
+            "Are You Sure?",
+            "Auto-Exec Will Run: " .. (VInfo[V] and VInfo[V].name or V),
+            "autoexec_version",
+            V
+        )
+    else
+        ShowConfirm(
+            "Are You Sure?",
+            "Use " .. (VInfo[V] and VInfo[V].name or V) .. "?",
+            "version",
+            V
+        )
+    end
 end
 
 CardLennon.MouseButton1Click:Connect(function() AskVersion("lennon") end)
@@ -1311,6 +1313,19 @@ ConfirmYes.MouseButton1Click:Connect(function()
     if Action == "version" and V then
         HideModal()
         task.spawn(function() ApplyVersion(V) end)
+    elseif Action == "autoexec_version" and V then
+        HideModal()
+        WriteAutoExecVersion(V)
+        task.spawn(function()
+            ApplyVersion(V)
+            if EnableAutoExec() then
+                ApplyAutoExecVisual(true)
+                Notify("Auto-Exec", "Will Run: " .. (VInfo[V] and VInfo[V].name or V), 4)
+            else
+                ApplyAutoExecVisual(false)
+                Notify("Auto-Exec", "Not Supported", 4)
+            end
+        end)
     elseif Action == "reset" then
         HideModal()
         ResetStats()
@@ -1320,21 +1335,42 @@ ConfirmYes.MouseButton1Click:Connect(function()
 end)
 
 ConfirmNo.MouseButton1Click:Connect(function()
-    if PendingAction == "version" then
-        ShowPicker()
+    if PendingAction == "version" or PendingAction == "autoexec_version" then
+        ShowPicker(PickerMode)
     else
         HideModal()
     end
 end)
 
-VersionBtn.MouseButton1Click:Connect(ShowPicker)
+VersionBtn.MouseButton1Click:Connect(function()
+    ShowPicker("runtime")
+end)
+
+PersistBtn.MouseButton1Click:Connect(function()
+    if PersistOn then
+        DisableAutoExec()
+        ApplyAutoExecVisual(false)
+        Notify("Auto-Exec", "Disabled", 3)
+    else
+        if game.PlaceId ~= ALLOWED_PLACE_ID then
+            Notify("Auto-Exec", "Only Works in This Game", 4)
+            return
+        end
+        if not queueFunc then
+            Notify("Auto-Exec", "Not Supported", 4)
+            return
+        end
+        ShowPicker("autoexec")
+    end
+end)
 
 RefreshBtn.MouseButton1Click:Connect(function()
     ShowConfirm("Are You Sure?", "This Will Reset All Stats", "reset")
 end)
 
 if ReadAutoExec() then
-    if EnableAutoExec() then
+    if queueFunc and game.PlaceId == ALLOWED_PLACE_ID then
+        PersistOn = true
         ApplyAutoExecVisual(true)
     end
 end
@@ -1347,9 +1383,9 @@ end)
 task.spawn(function()
     task.wait(0.6)
     if WasAuto then
-        local Saved = ReadSavedVersion()
+        local Saved = ReadAutoExecVersion()
         if Saved then ApplyVersion(Saved) end
     else
-        ShowPicker()
+        ShowPicker("runtime")
     end
 end)
