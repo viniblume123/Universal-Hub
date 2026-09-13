@@ -17,12 +17,13 @@ local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
 local TELEPORT_FILE = "sae_last_teleport.json"
 local POS_FILE = "sae_ui_pos.json"
+local STATS_FILE = "sae_stats.json"
+local WAS_AUTO_FILE = "sae_was_auto.json"
 local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
 local GUI_NAME = "SAE_Hub_UI"
-local ANTIAFK_INTERVAL = 120
 
 task.spawn(function()
     pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
@@ -34,24 +35,9 @@ task.spawn(function()
     pcall(function() loadstring(game:HttpGet(ANTISAE_URL))() end)
 end)
 
-task.spawn(function()
-    local VirtualUser = game:GetService("VirtualUser")
-    task.wait(5)
-    while true do
-        pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:ClickButton1(Vector2.new(10, 10))
-        end)
-        task.wait(0.15)
-        pcall(function()
-            VirtualUser:ButtonDown(Enum.KeyCode.Space)
-        end)
-        task.wait(0.1)
-        pcall(function()
-            VirtualUser:ButtonUp(Enum.KeyCode.Space)
-        end)
-        task.wait(ANTIAFK_INTERVAL)
-    end
+-- === ANTI-AFK (sem VirtualUser) ===
+pcall(function()
+    LocalPlayer.Idled:Connect(function() end)
 end)
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
@@ -168,6 +154,53 @@ local function writePos(pos)
     end
 end
 
+-- === STATS ===
+local function defaultStats()
+    return {hops = 0, execAuto = 0, execManual = 0}
+end
+
+local function readStats()
+    local d = defaultStats()
+    if not isfile or not isfile(STATS_FILE) then return d end
+    local ok, content = pcall(readfile, STATS_FILE)
+    if not ok or not content then return d end
+    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok2 and type(parsed) == "table" then
+        for k, v in pairs(d) do
+            if type(parsed[k]) == "number" then d[k] = parsed[k] end
+        end
+    end
+    return d
+end
+
+local function writeStats(s)
+    if writefile then pcall(writefile, STATS_FILE, HttpService:JSONEncode(s)) end
+end
+
+-- detecta se esta execução veio do auto-exec (loader escreve marker antes de carregar)
+local function consumeWasAuto()
+    if not isfile or not isfile(WAS_AUTO_FILE) then return false end
+    local ok, content = pcall(readfile, WAS_AUTO_FILE)
+    if not ok or content ~= "1" then return false end
+    if delfile then
+        pcall(delfile, WAS_AUTO_FILE)
+    elseif writefile then
+        pcall(writefile, WAS_AUTO_FILE, "0")
+    end
+    return true
+end
+
+local SESSION_START = os.time()
+
+do
+    local wasAuto = consumeWasAuto()
+    local s = readStats()
+    if wasAuto then s.execAuto = s.execAuto + 1
+    else s.execManual = s.execManual + 1 end
+    writeStats(s)
+end
+
+-- === Friend cache / server finding (inalterado) ===
 local friendCache = {ids = nil, time = 0}
 
 local function getFriendGameIds()
@@ -315,8 +348,8 @@ if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
-panel.Size = UDim2.new(0, 230, 0, 128)
-panel.Position = readPos() or UDim2.new(0.5, -115, 0.78, 0)
+panel.Size = UDim2.new(0, 230, 0, 274)
+panel.Position = readPos() or UDim2.new(0.5, -115, 0.72, 0)
 panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 panel.BorderSizePixel = 0
 panel.Parent = Gui
@@ -369,6 +402,57 @@ dragArea.Text = ""
 dragArea.AutoButtonColor = false
 dragArea.Parent = panel
 
+-- === STATS FRAME ===
+local statsFrame = Instance.new("Frame")
+statsFrame.Size = UDim2.new(1, -20, 0, 112)
+statsFrame.Position = UDim2.new(0, 10, 0, 32)
+statsFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+statsFrame.BorderSizePixel = 0
+statsFrame.Parent = panel
+
+local statsCorner = Instance.new("UICorner")
+statsCorner.CornerRadius = UDim.new(0, 9)
+statsCorner.Parent = statsFrame
+
+local statsStroke = Instance.new("UIStroke")
+statsStroke.Color = Color3.fromRGB(60, 60, 85)
+statsStroke.Thickness = 1
+statsStroke.Transparency = 0.5
+statsStroke.Parent = statsFrame
+
+local statsLayout = Instance.new("UIListLayout")
+statsLayout.Padding = UDim.new(0, 4)
+statsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+statsLayout.Parent = statsFrame
+
+local statsPadding = Instance.new("UIPadding")
+statsPadding.PaddingTop = UDim.new(0, 8)
+statsPadding.PaddingLeft = UDim.new(0, 10)
+statsPadding.PaddingRight = UDim.new(0, 10)
+statsPadding.PaddingBottom = UDim.new(0, 8)
+statsPadding.Parent = statsFrame
+
+local function makeStatLabel(prefix, order)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 0, 20)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = prefix .. ": --"
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(210, 210, 230)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.LayoutOrder = order
+    lbl.Parent = statsFrame
+    return lbl
+end
+
+local hopLbl    = makeStatLabel("Hops", 1)
+local autoLbl   = makeStatLabel("Execs (auto)", 2)
+local manualLbl = makeStatLabel("Execs (manual)", 3)
+local timeLbl   = makeStatLabel("Tempo no srv", 4)
+
+local refreshStats -- forward declaration
+
 local persistOn = false
 
 local function makeBtn(text, yPos, isToggle)
@@ -412,8 +496,33 @@ local function makeBtn(text, yPos, isToggle)
     return btn, s
 end
 
-local hopBtn = makeBtn("Server Hop", 38, false)
-local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 78, true)
+local hopBtn = makeBtn("Server Hop", 152, false)
+local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 192, true)
+local refreshBtn = makeBtn("Refresh Stats", 232, false)
+
+refreshStats = function()
+    local s = readStats()
+    hopLbl.Text = "Hops: " .. s.hops
+    autoLbl.Text = "Execs (auto): " .. s.execAuto
+    manualLbl.Text = "Execs (manual): " .. s.execManual
+    local mins = math.floor((os.time() - SESSION_START) / 60)
+    local secs = (os.time() - SESSION_START) % 60
+    if mins < 1 then
+        timeLbl.Text = "Tempo no srv: " .. secs .. "s"
+    else
+        timeLbl.Text = "Tempo no srv: " .. mins .. " min"
+    end
+end
+
+refreshStats()
+
+-- auto-update do tempo a cada 10s
+task.spawn(function()
+    while true do
+        task.wait(10)
+        pcall(refreshStats)
+    end
+end)
 
 local dragging = false
 local dragStart, startPos
@@ -484,6 +593,11 @@ hopBtn.MouseButton1Click:Connect(function()
                     task.wait(HOP_RETRY_DELAY)
                 else
                     writeLastTeleport(os.time())
+                    -- incrementa hops
+                    local s = readStats()
+                    s.hops = s.hops + 1
+                    writeStats(s)
+                    pcall(refreshStats)
                     task.wait(HOP_RETRY_DELAY)
                 end
             else
@@ -502,7 +616,10 @@ local queueFunc = queue_on_teleport
     or queueonteleport
 
 local function buildLoader()
+    -- escreve marker ANTES de carregar o script principal,
+    -- pra próxima execução saber que veio do auto-exec
     return
+        'if writefile then pcall(writefile, "sae_was_auto.json", "1") end ' ..
         'if isfile and isfile("sae_autoexec.json") then ' ..
         'local ok, c = pcall(readfile, "sae_autoexec.json") ' ..
         'if ok and c then ' ..
@@ -560,6 +677,13 @@ persistBtn.MouseButton1Click:Connect(function()
         disableAutoExec()
         applyAutoExecVisual(false)
     end
+end)
+
+refreshBtn.MouseButton1Click:Connect(function()
+    pcall(refreshStats)
+    refreshBtn.Text = "Atualizado!"
+    task.wait(1)
+    refreshBtn.Text = "Refresh Stats"
 end)
 
 if readAutoExec() then
