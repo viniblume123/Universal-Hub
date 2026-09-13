@@ -20,11 +20,17 @@ task.spawn(function()
     end)
 end)
 
+local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
+
 local function httpGet(url)
+    if REQUEST then
+        local ok, res = pcall(REQUEST, {Url = url, Method = "GET"})
+        if ok and type(res) == "table" and res.Body and res.Body ~= "" then
+            return res.Body
+        end
+    end
     local ok, res = pcall(function() return game:HttpGet(url) end)
     if ok and res and res ~= "" then return res end
-    ok, res = pcall(function() return HttpService:GetAsync(url) end)
-    if ok then return res end
     return nil
 end
 
@@ -76,6 +82,7 @@ end
 
 local function getFriendGameIds()
     local ids = {}
+    if not REQUEST then return ids end
     local res = httpGet("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends")
     if not res then return ids end
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
@@ -83,13 +90,11 @@ local function getFriendGameIds()
     local list = {}
     for _, f in ipairs(data.data) do table.insert(list, f.id) end
     if #list == 0 then return ids end
-    local req = (syn and syn.request) or (http and http.request) or http_request or request
-    if not req then return ids end
     for i = 1, #list, 100 do
         local batch = {}
         for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
         local body = HttpService:JSONEncode({userIds = batch})
-        local ok2, res2 = pcall(req, {
+        local ok2, res2 = pcall(REQUEST, {
             Url = "https://presence.roblox.com/v1/presence/users",
             Method = "POST",
             Body = body,
@@ -109,7 +114,9 @@ end
 
 local function fetchPage(cursor)
     local url = "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=100"
-    if cursor and cursor ~= "" then url = url .. "&cursor=" .. cursor end
+    if cursor and cursor ~= "" then
+        url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+    end
     local res = httpGet(url)
     if not res then return nil end
     local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
@@ -117,8 +124,7 @@ local function fetchPage(cursor)
     return data
 end
 
-local function findBestServer()
-    local friendIds = getFriendGameIds()
+local function collectCandidates(filterFn, friendIds)
     local candidates = {}
     local cursor = nil
     local pages = 0
@@ -127,23 +133,43 @@ local function findBestServer()
         local data = fetchPage(cursor)
         if not data or not data.data then break end
         for _, sv in ipairs(data.data) do
-            if sv.id and sv.id ~= game.JobId
-                and sv.playing < sv.maxPlayers
-                and not isBlocked(sv.id)
-                and not friendIds[sv.id] then
-                table.insert(candidates, sv)
+            if sv.id and sv.id ~= game.JobId and sv.playing < sv.maxPlayers then
+                if filterFn(sv, friendIds) then
+                    table.insert(candidates, sv)
+                end
             end
         end
         cursor = data.nextPageCursor
         if not cursor or cursor == "" then break end
     end
-    if #candidates == 0 then return nil end
+    return candidates
+end
+
+local function pickBest(candidates)
     table.sort(candidates, function(a, b)
         if a.playing ~= b.playing then return a.playing < b.playing end
         return (a.ping or 999) < (b.ping or 999)
     end)
     local poolSize = math.min(5, #candidates)
     return candidates[math.random(1, poolSize)]
+end
+
+local function findBestServer()
+    local friendIds = getFriendGameIds()
+    local strict = collectCandidates(function(sv, f)
+        return not isBlocked(sv.id) and not f[sv.id]
+    end, friendIds)
+    if #strict > 0 then return pickBest(strict) end
+
+    local ignoreVisited = collectCandidates(function(sv, f)
+        return not f[sv.id]
+    end, friendIds)
+    if #ignoreVisited > 0 then return pickBest(ignoreVisited) end
+
+    local anyPublic = collectCandidates(function() return true end, friendIds)
+    if #anyPublic > 0 then return pickBest(anyPublic) end
+
+    return nil
 end
 
 local Gui = Instance.new("ScreenGui")
@@ -341,6 +367,7 @@ local function disableAutoExec()
         teleportConn = nil
     end
     setQueue("")
+    persistOn = false
 end
 
 persistBtn.MouseButton1Click:Connect(function()
@@ -363,7 +390,6 @@ persistBtn.MouseButton1Click:Connect(function()
         end
     else
         disableAutoExec()
-        persistOn = false
         persistBtn.Text = "Auto-Exec  OFF"
         TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
         TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
