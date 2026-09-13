@@ -387,6 +387,18 @@ local queueFunc = queue_on_teleport
     or (fluxus and fluxus.queue_on_teleport)
     or queueonteleport
 
+local function buildLoader()
+    return
+        'if isfile and isfile("sae_autoexec.json") then ' ..
+        'local ok, c = pcall(readfile, "sae_autoexec.json") ' ..
+        'if ok and c then ' ..
+        'local H = game:GetService("HttpService") ' ..
+        'local ok2, d = pcall(H.JSONDecode, H, c) ' ..
+        'if ok2 and type(d) == "table" and d.on == true then ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))() end) ' ..
+        'end end end'
+end
+
 local function applyAutoExecVisual(on)
     if on then
         persistBtn.Text = "Auto-Exec  ON"
@@ -399,20 +411,26 @@ local function applyAutoExecVisual(on)
     end
 end
 
+local function armLoader()
+    if not queueFunc then return false end
+    return pcall(function() queueFunc(buildLoader()) end)
+end
+
 local function enableAutoExec()
     if SCRIPT_URL == "" or not queueFunc then return false end
-    local code = "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
-    local ok = pcall(function() queueFunc(code) end)
-    if not ok then return false end
-    persistOn = true
     writeAutoExec(true)
+    if not armLoader() then
+        writeAutoExec(false)
+        return false
+    end
+    persistOn = true
     return true
 end
 
 local function disableAutoExec()
     persistOn = false
     writeAutoExec(false)
-    if queueFunc then pcall(function() queueFunc("") end) end
+    armLoader()
 end
 
 persistBtn.MouseButton1Click:Connect(function()
