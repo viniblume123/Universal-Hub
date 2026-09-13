@@ -10,24 +10,12 @@ local CoreGui = game:GetService("CoreGui")
 local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 3600
 
-local function Notify(title, content, duration)
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = title,
-            Text = content,
-            Duration = duration or 3
-        })
-    end)
-end
-
--- ===== Executa o LennonHub =====
 task.spawn(function()
     pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/refs/heads/main/stealaneggv2"))()
     end)
 end)
 
--- ===== Server Hop =====
 local visitedServers = {}
 
 local function getServerList()
@@ -68,7 +56,6 @@ local function markVisited(id)
     if id and id ~= "" then visitedServers[id] = os.time() end
 end
 
--- ===== GUI =====
 local Gui = Instance.new("ScreenGui")
 Gui.Name = "SAE_" .. tostring(math.random(100000, 999999))
 Gui.ResetOnSpawn = false
@@ -149,7 +136,6 @@ local function makeDraggable(btn, onClick)
     end)
 end
 
--- ===== Botão: Server Hop =====
 local hopBtn = makeBtn("Server Hop", UDim2.new(0.5, -90, 0.85, 0))
 
 makeDraggable(hopBtn, function()
@@ -186,7 +172,6 @@ makeDraggable(hopBtn, function()
     hopBtn:SetAttribute("Hop", false)
 end)
 
--- ===== Botão: Auto-Exec =====
 local persistOn = false
 local persistBtn = makeBtn("Auto-Exec: OFF", UDim2.new(0.5, -90, 0.75, 0))
 
@@ -217,7 +202,6 @@ makeDraggable(persistBtn, function()
             persistBtn.Text = "Configure URL"
             task.wait(2)
             persistBtn.Text = "Auto-Exec: OFF"
-            Notify("Auto-Exec", "Coloque a URL do script na variável SCRIPT_URL", 4)
             return
         end
 
@@ -226,19 +210,16 @@ makeDraggable(persistBtn, function()
             persistOn = true
             persistBtn.Text = "Auto-Exec: ON"
             persistBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 0)
-            Notify("Auto-Exec", "Ativado", 2)
         else
             persistBtn.Text = "Sem suporte"
             task.wait(2)
             persistBtn.Text = "Auto-Exec: OFF"
-            Notify("Auto-Exec", "Seu executor não suporta queue_on_teleport", 4)
         end
     else
         setQueue("")
         persistOn = false
         persistBtn.Text = "Auto-Exec: OFF"
         persistBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-        Notify("Auto-Exec", "Desativado", 2)
     end
 end)
 
@@ -246,5 +227,3 @@ task.spawn(function()
     task.wait(2)
     markVisited(game.JobId)
 end)
-
-Notify("Hub", "Lennon carregado + botões ativos", 4)
