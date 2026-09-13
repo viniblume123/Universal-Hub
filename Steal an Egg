@@ -23,32 +23,51 @@ local POS_FILE = "sae_ui_pos.json"
 local STATS_FILE = "sae_stats.json"
 local WAS_AUTO_FILE = "sae_was_auto.json"
 local VERSION_FILE = "sae_version.json"
+local COLLAPSED_FILE = "sae_ui_collapsed.json"
 local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
 local GUI_NAME = "SAE_Hub_UI"
 
-local COL = {
-    Bg         = Color3.fromRGB(15, 15, 22),
-    BgTop      = Color3.fromRGB(26, 26, 38),
-    Card       = Color3.fromRGB(22, 22, 32),
-    CardHover  = Color3.fromRGB(34, 34, 48),
-    Stroke     = Color3.fromRGB(45, 45, 62),
-    StrokeHot  = Color3.fromRGB(120, 120, 200),
-    Text       = Color3.fromRGB(232, 232, 242),
-    TextDim    = Color3.fromRGB(150, 150, 172),
-    TextFaint  = Color3.fromRGB(110, 110, 130),
-    Accent     = Color3.fromRGB(124, 124, 240),
-    Success    = Color3.fromRGB(74, 222, 128),
-    SuccessBg  = Color3.fromRGB(28, 60, 42),
-    Danger     = Color3.fromRGB(220, 80, 80),
-    DangerBg   = Color3.fromRGB(62, 28, 32),
-    Blue       = Color3.fromRGB(80, 140, 220),
-    BlueBg     = Color3.fromRGB(28, 42, 62),
-    Orange     = Color3.fromRGB(230, 150, 60),
-    OrangeBg   = Color3.fromRGB(60, 42, 22),
-    PurpleBg   = Color3.fromRGB(48, 42, 82)
+local C = {
+    Bg          = Color3.fromRGB(14, 14, 20),
+    BgTop       = Color3.fromRGB(28, 28, 42),
+    Card        = Color3.fromRGB(21, 21, 30),
+    CardHover   = Color3.fromRGB(32, 32, 46),
+    Stroke      = Color3.fromRGB(42, 42, 58),
+    StrokeHot   = Color3.fromRGB(124, 124, 240),
+    Text        = Color3.fromRGB(236, 236, 248),
+    TextDim     = Color3.fromRGB(158, 158, 180),
+    TextFaint   = Color3.fromRGB(110, 110, 132),
+    Accent      = Color3.fromRGB(124, 124, 240),
+    Success     = Color3.fromRGB(74, 222, 128),
+    SuccessBg   = Color3.fromRGB(26, 56, 40),
+    Danger      = Color3.fromRGB(230, 90, 90),
+    DangerBg    = Color3.fromRGB(60, 28, 32),
+    Purple      = Color3.fromRGB(160, 120, 240),
+    PurpleBg    = Color3.fromRGB(46, 40, 82),
+    Blue        = Color3.fromRGB(90, 160, 240),
+    BlueBg      = Color3.fromRGB(28, 44, 68),
+    Cyan        = Color3.fromRGB(80, 210, 190),
+    CyanBg      = Color3.fromRGB(26, 56, 54),
+    Orange      = Color3.fromRGB(240, 160, 70),
+    OrangeBg    = Color3.fromRGB(60, 42, 22),
+    Grey        = Color3.fromRGB(140, 140, 160)
+}
+
+local VInfo = {
+    lennon    = {name = "Lennon Hub",  color = C.Purple, bg = C.PurpleBg},
+    on        = {name = "ON Hub",      color = C.Blue,   bg = C.BlueBg},
+    both      = {name = "Both Hubs",   color = C.Cyan,   bg = C.CyanBg},
+    both_auto = {name = "Both + Auto", color = C.Orange, bg = C.OrangeBg}
+}
+
+local VFeatures = {
+    lennon    = {lennon = true,  on = false, auto = true},
+    on        = {lennon = false, on = true,  auto = false},
+    both      = {lennon = true,  on = true,  auto = false},
+    both_auto = {lennon = true,  on = true,  auto = true}
 }
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
@@ -107,16 +126,13 @@ local function WriteJson(Path, Data)
     if writefile then pcall(writefile, Path, HttpService:JSONEncode(Data)) end
 end
 
-local function ReadVisited()
-    local Data = ReadJson(STORAGE_FILE, {})
+local Visited = ReadJson(STORAGE_FILE, {})
+do
     local Now = os.time()
-    for K, V in pairs(Data) do
-        if type(V) ~= "number" or (Now - V) >= COOLDOWN_TIME then Data[K] = nil end
+    for K, V in pairs(Visited) do
+        if type(V) ~= "number" or (Now - V) >= COOLDOWN_TIME then Visited[K] = nil end
     end
-    return Data
 end
-
-local Visited = ReadVisited()
 Visited[game.JobId] = os.time()
 WriteJson(STORAGE_FILE, Visited)
 
@@ -138,26 +154,15 @@ local function MarkVisited(JobId)
     end
 end
 
-local function ReadAutoExec()
-    return ReadJson(AUTOEXEC_FILE, {on = false}).on == true
-end
-
-local function WriteAutoExec(On)
-    WriteJson(AUTOEXEC_FILE, {on = On})
-end
-
-local function ReadLastTeleport()
-    return ReadJson(TELEPORT_FILE, {t = 0}).t or 0
-end
-
-local function WriteLastTeleport(T)
-    WriteJson(TELEPORT_FILE, {t = T})
-end
+local function ReadAutoExec() return ReadJson(AUTOEXEC_FILE, {on = false}).on == true end
+local function WriteAutoExec(On) WriteJson(AUTOEXEC_FILE, {on = On}) end
+local function ReadLastTeleport() return ReadJson(TELEPORT_FILE, {t = 0}).t or 0 end
+local function WriteLastTeleport(T) WriteJson(TELEPORT_FILE, {t = T}) end
 
 local function ReadPos()
     local D = ReadJson(POS_FILE, nil)
     if not D or type(D.x) ~= "number" or type(D.y) ~= "number" then return nil end
-    return UDim2.new(D.xs or 0.5, D.x, D.ys or 0.58, D.y)
+    return UDim2.new(D.xs or 0.5, D.x, D.ys or 0.55, D.y)
 end
 
 local function WritePos(Pos)
@@ -167,9 +172,7 @@ local function WritePos(Pos)
     })
 end
 
-local function DefaultStats()
-    return {hops = 0, execAuto = 0, execManual = 0}
-end
+local function DefaultStats() return {hops = 0, execAuto = 0, execManual = 0} end
 
 local function ReadStats()
     local D = DefaultStats()
@@ -182,9 +185,7 @@ local function ReadStats()
     return D
 end
 
-local function WriteStats(S)
-    WriteJson(STATS_FILE, S)
-end
+local function WriteStats(S) WriteJson(STATS_FILE, S) end
 
 local function ConsumeWasAuto()
     if not isfile or not isfile(WAS_AUTO_FILE) then return false end
@@ -195,27 +196,31 @@ local function ConsumeWasAuto()
     return true
 end
 
-local function ReadVersion()
+local function ReadSavedVersion()
     local D = ReadJson(VERSION_FILE, nil)
     if not D or type(D.version) ~= "string" then return nil end
-    local Valid = {lennon = true, on = true, both = true, both_auto = true}
-    if Valid[D.version] then return D.version end
+    if VInfo[D.version] then return D.version end
     return nil
 end
 
-local function WriteVersion(V)
-    WriteJson(VERSION_FILE, {version = V})
-end
+local function WriteSavedVersion(V) WriteJson(VERSION_FILE, {version = V}) end
 
+local WasAuto = ConsumeWasAuto()
 local SESSION_START = os.time()
 
 do
-    local WasAuto = ConsumeWasAuto()
     local S = ReadStats()
     if WasAuto then S.execAuto = S.execAuto + 1
     else S.execManual = S.execManual + 1 end
     WriteStats(S)
 end
+
+local State = {
+    hasLennon = false,
+    hasOn = false,
+    hasAuto = false,
+    autoRunning = false
+}
 
 local LoadedHubs = {}
 
@@ -242,9 +247,131 @@ local function TryLoad(Url, Label)
 end
 
 task.spawn(function()
-    task.wait(1)
+    task.wait(1.2)
     TryLoad(ANTISAE_URL, "Anti SAE")
 end)
+
+local function GetGuiContainers()
+    local Containers = {CoreGui}
+    local Pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if Pg then table.insert(Containers, Pg) end
+    if gethui then
+        local Ok, Hui = pcall(gethui)
+        if Ok and Hui then table.insert(Containers, Hui) end
+    end
+    return Containers
+end
+
+local Keywords = {"LOOP", "AUTO", "FARM", "TELEPORT", "TOGGLE", "ENABLE", "START"}
+
+local function IsRoundish(Obj)
+    local Corner = Obj:FindFirstChildOfClass("UICorner")
+    if not Corner then return false end
+    local Cr = Corner.CornerRadius
+    if Cr.X.Scale >= 0.4 then return true end
+    if Cr.Offset >= 10 and Obj.AbsoluteSize.X <= 60 and Obj.AbsoluteSize.Y <= 60 then
+        return true
+    end
+    return false
+end
+
+local function FireClick(Btn)
+    if not Btn then return false end
+    if not (Btn:IsA("TextButton") or Btn:IsA("ImageButton")) then return false end
+    if firesignal then
+        local Ok = pcall(firesignal, Btn.MouseButton1Click)
+        if Ok then return true end
+    end
+    local Ok = pcall(function() Btn:Activate() end)
+    return Ok
+end
+
+local function FindToggleCandidates()
+    local Cands = {}
+    local Seen = {}
+
+    local function Add(Obj, Priority)
+        if Seen[Obj] then return end
+        Seen[Obj] = true
+        table.insert(Cands, {obj = Obj, priority = Priority})
+    end
+
+    for _, Container in ipairs(GetGuiContainers()) do
+        local Ok, Desc = pcall(function() return Container:GetDescendants() end)
+        if Ok and Desc then
+            for _, Obj in ipairs(Desc) do
+                if Obj:IsA("TextLabel") and type(Obj.Text) == "string" and #Obj.Text > 0 then
+                    local Up = Obj.Text:upper()
+                    local Matched = false
+                    for _, Kw in ipairs(Keywords) do
+                        if Up:find(Kw) then Matched = true; break end
+                    end
+                    if Matched then
+                        local P = Obj.Parent
+                        if P then
+                            for _, Sib in ipairs(P:GetChildren()) do
+                                if (Sib:IsA("TextButton") or Sib:IsA("ImageButton")) and IsRoundish(Sib) then
+                                    Add(Sib, 1)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if #Cands == 0 then
+        for _, Container in ipairs(GetGuiContainers()) do
+            local Ok, Desc = pcall(function() return Container:GetDescendants() end)
+            if Ok and Desc then
+                for _, Obj in ipairs(Desc) do
+                    if Obj:IsA("TextButton") or Obj:IsA("ImageButton") then
+                        local Sz = Obj.AbsoluteSize
+                        if Sz.X <= 60 and Sz.Y <= 60 and IsRoundish(Obj) then
+                            Add(Obj, 2)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    table.sort(Cands, function(A, B) return A.priority < B.priority end)
+    return Cands
+end
+
+local function TryClickLennonToggle()
+    local Cands = FindToggleCandidates()
+    if #Cands == 0 then return false end
+    for _, Entry in ipairs(Cands) do
+        if FireClick(Entry.obj) then return true end
+    end
+    return false
+end
+
+local function StartLennonAutoClick()
+    if State.autoRunning then return end
+    State.autoRunning = true
+    task.spawn(function()
+        local FailCount = 0
+        while true do
+            local ToAlign = (5 - (os.time() % 5)) % 5
+            task.wait(ToAlign)
+            task.wait(3)
+            local Ok = TryClickLennonToggle()
+            if Ok then
+                FailCount = 0
+            else
+                FailCount = FailCount + 1
+                if FailCount == 5 then
+                    Notify("Lennon Hub", "Toggle Not Found", 4)
+                    FailCount = 0
+                end
+            end
+        end
+    end)
+end
 
 local FriendCache = {ids = nil, time = 0}
 
@@ -334,131 +461,25 @@ local function FindBestServer()
     local Orders = {"Asc", "Desc"}
 
     for _, Order in ipairs(Orders) do
-        local C = CollectCandidates(function(Sv, F)
+        local C2 = CollectCandidates(function(Sv, F)
             return not IsBlocked(Sv.id) and not F[Sv.id]
         end, FriendIds, Order)
-        if #C > 0 then return PickBest(C) end
+        if #C2 > 0 then return PickBest(C2) end
     end
 
     for _, Order in ipairs(Orders) do
-        local C = CollectCandidates(function(Sv, F)
+        local C2 = CollectCandidates(function(Sv, F)
             return not F[Sv.id]
         end, FriendIds, Order)
-        if #C > 0 then return PickBest(C) end
+        if #C2 > 0 then return PickBest(C2) end
     end
 
     for _, Order in ipairs(Orders) do
-        local C = CollectCandidates(function() return true end, FriendIds, Order)
-        if #C > 0 then return PickBest(C) end
+        local C2 = CollectCandidates(function() return true end, FriendIds, Order)
+        if #C2 > 0 then return PickBest(C2) end
     end
 
     return nil
-end
-
-local function GetGuiContainers()
-    local Containers = {CoreGui}
-    local Pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if Pg then table.insert(Containers, Pg) end
-    if gethui then
-        local Ok, Hui = pcall(gethui)
-        if Ok and Hui then table.insert(Containers, Hui) end
-    end
-    return Containers
-end
-
-local function FindLennonRoot()
-    for _, Container in ipairs(GetGuiContainers()) do
-        local Ok, Descendants = pcall(function() return Container:GetDescendants() end)
-        if Ok and Descendants then
-            for _, Obj in ipairs(Descendants) do
-                if Obj:IsA("TextLabel") and type(Obj.Text) == "string" then
-                    if Obj.Text:upper():find("LENNON") then
-                        local Root = Obj
-                        while Root.Parent and Root.Parent ~= Container do
-                            Root = Root.Parent
-                        end
-                        if Root and Root.Parent == Container then return Root end
-                    end
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function FireClick(Btn)
-    if not Btn then return false end
-    if Btn:IsA("TextButton") or Btn:IsA("ImageButton") then
-        if firesignal then return pcall(firesignal, Btn.MouseButton1Click) end
-        return pcall(function() Btn:Activate() end)
-    end
-    return false
-end
-
-local function TryClickLennonToggle()
-    local Root = FindLennonRoot()
-    if not Root then return false end
-
-    local Ok, Desc = pcall(function() return Root:GetDescendants() end)
-    if not Ok or not Desc then return false end
-
-    for _, Obj in ipairs(Desc) do
-        if Obj:IsA("TextButton") or Obj:IsA("ImageButton") then
-            local Corner = Obj:FindFirstChildOfClass("UICorner")
-            if Corner then
-                local Cr = Corner.CornerRadius
-                if Cr.X.Scale >= 0.5 and Cr.Y.Scale >= 0.5 then
-                    if FireClick(Obj) then return true end
-                end
-            end
-        end
-    end
-
-    for _, Obj in ipairs(Desc) do
-        if Obj:IsA("Frame") then
-            local Corner = Obj:FindFirstChildOfClass("UICorner")
-            if Corner then
-                local Cr = Corner.CornerRadius
-                if Cr.X.Scale >= 0.5 and Cr.Y.Scale >= 0.5 then
-                    local Size = Obj.AbsoluteSize
-                    if Size.X >= 15 and Size.X <= 45 and Size.Y >= 15 and Size.Y <= 45 then
-                        local Parent = Obj.Parent
-                        while Parent and Parent ~= Root do
-                            if Parent:IsA("TextButton") or Parent:IsA("ImageButton") then
-                                if FireClick(Parent) then return true end
-                                break
-                            end
-                            Parent = Parent.Parent
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return false
-end
-
-local function StartLennonAutoClick()
-    task.spawn(function()
-        local FailCount = 0
-        while true do
-            local Sec = os.time() % 5
-            local Align = (5 - Sec) % 5
-            if Align == 0 then Align = 5 end
-            task.wait(Align)
-            task.wait(3)
-            local Ok = TryClickLennonToggle()
-            if Ok then
-                FailCount = 0
-            else
-                FailCount = FailCount + 1
-                if FailCount == 5 then
-                    Notify("Lennon Hub", "Toggle Not Found", 4)
-                end
-            end
-        end
-    end)
 end
 
 pcall(function()
@@ -488,11 +509,20 @@ pcall(function()
 end)
 if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
+local PANEL_W = 262
+local HEADER_H = 44
+local DIVIDER_H = 1
+local STATS_H = 128
+local BTN_H = 38
+local BTN_GAP = 8
+local PAD = 12
+local PANEL_H = HEADER_H + PAD + STATS_H + PAD + (BTN_H * 4) + (BTN_GAP * 3) + PAD
+
 local Panel = Instance.new("Frame")
 Panel.Name = "Panel"
-Panel.Size = UDim2.new(0, 250, 0, 330)
-Panel.Position = ReadPos() or UDim2.new(0.5, -125, 0.55, 0)
-Panel.BackgroundColor3 = COL.Bg
+Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+Panel.Position = ReadPos() or UDim2.new(0.5, -PANEL_W/2, 0.55, 0)
+Panel.BackgroundColor3 = C.Bg
 Panel.BorderSizePixel = 0
 Panel.Parent = Gui
 
@@ -500,62 +530,62 @@ local PanelCorner = Instance.new("UICorner")
 PanelCorner.CornerRadius = UDim.new(0, 16)
 PanelCorner.Parent = Panel
 
-local PanelGradient = Instance.new("UIGradient")
-PanelGradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, COL.BgTop),
-    ColorSequenceKeypoint.new(1, COL.Bg)
+local PanelGrad = Instance.new("UIGradient")
+PanelGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, C.BgTop),
+    ColorSequenceKeypoint.new(1, C.Bg)
 }
-PanelGradient.Rotation = 135
-PanelGradient.Parent = Panel
+PanelGrad.Rotation = 135
+PanelGrad.Parent = Panel
 
 local PanelStroke = Instance.new("UIStroke")
-PanelStroke.Color = COL.Stroke
+PanelStroke.Color = C.Stroke
 PanelStroke.Thickness = 1
-PanelStroke.Transparency = 0.2
+PanelStroke.Transparency = 0.15
 PanelStroke.Parent = Panel
 
 local Header = Instance.new("Frame")
-Header.Size = UDim2.new(1, 0, 0, 40)
+Header.Size = UDim2.new(1, 0, 0, HEADER_H)
 Header.BackgroundTransparency = 1
 Header.Parent = Panel
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -60, 0, 20)
-TitleLabel.Position = UDim2.new(0, 16, 0, 12)
+TitleLabel.Size = UDim2.new(1, -110, 0, 20)
+TitleLabel.Position = UDim2.new(0, 16, 0, 11)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "SAE Hub"
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 15
-TitleLabel.TextColor3 = COL.Text
+TitleLabel.TextColor3 = C.Text
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = Header
 
 local SubLabel = Instance.new("TextLabel")
-SubLabel.Size = UDim2.new(1, -60, 0, 14)
-SubLabel.Position = UDim2.new(0, 16, 0, 30)
+SubLabel.Size = UDim2.new(1, -110, 0, 14)
+SubLabel.Position = UDim2.new(0, 16, 0, 28)
 SubLabel.BackgroundTransparency = 1
-SubLabel.Text = "Steal a Egg Hub"
+SubLabel.Text = "Steal a Egg Automation"
 SubLabel.Font = Enum.Font.Gotham
 SubLabel.TextSize = 10
-SubLabel.TextColor3 = COL.TextFaint
+SubLabel.TextColor3 = C.TextFaint
 SubLabel.TextXAlignment = Enum.TextXAlignment.Left
 SubLabel.Parent = Header
 
 local StatusDot = Instance.new("Frame")
-StatusDot.Size = UDim2.new(0, 8, 0, 8)
-StatusDot.Position = UDim2.new(1, -22, 0, 20)
-StatusDot.BackgroundColor3 = COL.Success
+StatusDot.Size = UDim2.new(0, 7, 0, 7)
+StatusDot.Position = UDim2.new(1, -50, 0, 22)
+StatusDot.BackgroundColor3 = C.Success
 StatusDot.BorderSizePixel = 0
 StatusDot.Parent = Header
 
-local DotCorner = Instance.new("UICorner")
-DotCorner.CornerRadius = UDim.new(1, 0)
-DotCorner.Parent = StatusDot
+local StatusDotCorner = Instance.new("UICorner")
+StatusDotCorner.CornerRadius = UDim.new(1, 0)
+StatusDotCorner.Parent = StatusDot
 
 local DotPulse = Instance.new("Frame")
-DotPulse.Size = UDim2.new(0, 8, 0, 8)
-DotPulse.BackgroundColor3 = COL.Success
-DotPulse.BackgroundTransparency = 0.7
+DotPulse.Size = UDim2.new(0, 7, 0, 7)
+DotPulse.BackgroundColor3 = C.Success
+DotPulse.BackgroundTransparency = 0.6
 DotPulse.BorderSizePixel = 0
 DotPulse.ZIndex = 0
 DotPulse.Parent = StatusDot
@@ -566,18 +596,51 @@ DotPulseCorner.Parent = DotPulse
 
 task.spawn(function()
     while true do
-        DotPulse.Size = UDim2.new(0, 8, 0, 8)
-        DotPulse.BackgroundTransparency = 0.7
-        TweenService:Create(DotPulse, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.new(0, 22, 0, 22),
+        DotPulse.Size = UDim2.new(0, 7, 0, 7)
+        DotPulse.Position = UDim2.new(0, 0, 0, 0)
+        DotPulse.BackgroundTransparency = 0.6
+        TweenService:Create(DotPulse, TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Size = UDim2.new(0, 19, 0, 19),
+            Position = UDim2.new(0, -6, 0, -6),
             BackgroundTransparency = 1
         }):Play()
-        task.wait(1.4)
+        task.wait(1.6)
     end
 end)
 
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 26, 0, 26)
+MinimizeBtn.Position = UDim2.new(1, -34, 0, 9)
+MinimizeBtn.BackgroundColor3 = C.Card
+MinimizeBtn.Text = "–"
+MinimizeBtn.TextColor3 = C.TextDim
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.TextSize = 14
+MinimizeBtn.BorderSizePixel = 0
+MinimizeBtn.AutoButtonColor = false
+MinimizeBtn.Parent = Header
+
+local MinBtnCorner = Instance.new("UICorner")
+MinBtnCorner.CornerRadius = UDim.new(0, 8)
+MinBtnCorner.Parent = MinimizeBtn
+
+local MinBtnStroke = Instance.new("UIStroke")
+MinBtnStroke.Color = C.Stroke
+MinBtnStroke.Thickness = 1
+MinBtnStroke.Transparency = 0.4
+MinBtnStroke.Parent = MinimizeBtn
+
+MinimizeBtn.MouseEnter:Connect(function()
+    TweenService:Create(MinimizeBtn, TweenInfo.new(0.12), {BackgroundColor3 = C.CardHover}):Play()
+    TweenService:Create(MinBtnStroke, TweenInfo.new(0.12), {Color = C.StrokeHot, Transparency = 0}):Play()
+end)
+MinimizeBtn.MouseLeave:Connect(function()
+    TweenService:Create(MinimizeBtn, TweenInfo.new(0.12), {BackgroundColor3 = C.Card}):Play()
+    TweenService:Create(MinBtnStroke, TweenInfo.new(0.12), {Color = C.Stroke, Transparency = 0.4}):Play()
+end)
+
 local DragArea = Instance.new("TextButton")
-DragArea.Size = UDim2.new(1, 0, 0, 40)
+DragArea.Size = UDim2.new(1, -80, 0, HEADER_H)
 DragArea.Position = UDim2.new(0, 0, 0, 0)
 DragArea.BackgroundTransparency = 1
 DragArea.Text = ""
@@ -585,150 +648,155 @@ DragArea.AutoButtonColor = false
 DragArea.Parent = Panel
 
 local Divider = Instance.new("Frame")
-Divider.Size = UDim2.new(1, -24, 0, 1)
-Divider.Position = UDim2.new(0, 12, 0, 40)
-Divider.BackgroundColor3 = COL.Stroke
-Divider.BorderSizePixel = 0
+Divider.Size = UDim2.new(1, -24, 0, DIVIDER_H)
+Divider.Position = UDim2.new(0, 12, 0, HEADER_H)
+Divider.BackgroundColor3 = C.Stroke
 Divider.BackgroundTransparency = 0.4
+Divider.BorderSizePixel = 0
 Divider.Parent = Panel
 
+local Body = Instance.new("Frame")
+Body.Size = UDim2.new(1, 0, 1, -HEADER_H - DIVIDER_H)
+Body.Position = UDim2.new(0, 0, 0, HEADER_H + DIVIDER_H)
+Body.BackgroundTransparency = 1
+Body.ClipsDescendants = true
+Body.Parent = Panel
+
 local StatsCard = Instance.new("Frame")
-StatsCard.Size = UDim2.new(1, -24, 0, 106)
-StatsCard.Position = UDim2.new(0, 12, 0, 50)
-StatsCard.BackgroundColor3 = COL.Card
+StatsCard.Size = UDim2.new(1, -24, 0, STATS_H)
+StatsCard.Position = UDim2.new(0, 12, 0, PAD)
+StatsCard.BackgroundColor3 = C.Card
 StatsCard.BorderSizePixel = 0
-StatsCard.Parent = Panel
+StatsCard.Parent = Body
 
 local StatsCorner = Instance.new("UICorner")
 StatsCorner.CornerRadius = UDim.new(0, 10)
 StatsCorner.Parent = StatsCard
 
 local StatsStroke = Instance.new("UIStroke")
-StatsStroke.Color = COL.Stroke
+StatsStroke.Color = C.Stroke
 StatsStroke.Thickness = 1
 StatsStroke.Transparency = 0.5
 StatsStroke.Parent = StatsCard
 
-local StatsPadding = Instance.new("UIPadding")
-StatsPadding.PaddingTop = UDim.new(0, 8)
-StatsPadding.PaddingLeft = UDim.new(0, 12)
-StatsPadding.PaddingRight = UDim.new(0, 12)
-StatsPadding.PaddingBottom = UDim.new(0, 8)
-StatsPadding.Parent = StatsCard
+local StatsPad = Instance.new("UIPadding")
+StatsPad.PaddingTop = UDim.new(0, 8)
+StatsPad.PaddingLeft = UDim.new(0, 12)
+StatsPad.PaddingRight = UDim.new(0, 12)
+StatsPad.PaddingBottom = UDim.new(0, 8)
+StatsPad.Parent = StatsCard
 
 local StatsLayout = Instance.new("UIListLayout")
-StatsLayout.Padding = UDim.new(0, 6)
+StatsLayout.Padding = UDim.new(0, 5)
 StatsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 StatsLayout.Parent = StatsCard
 
-local function MakeStatRow(LabelText, Order)
-    local Row = Instance.new("Frame")
-    Row.Size = UDim2.new(1, 0, 0, 20)
-    Row.BackgroundTransparency = 1
-    Row.LayoutOrder = Order
-    Row.Parent = StatsCard
+local function MakeRow(Label, Order)
+    local R = Instance.new("Frame")
+    R.Size = UDim2.new(1, 0, 0, 20)
+    R.BackgroundTransparency = 1
+    R.LayoutOrder = Order
+    R.Parent = StatsCard
 
     local L = Instance.new("TextLabel")
-    L.Size = UDim2.new(0.6, 0, 1, 0)
+    L.Size = UDim2.new(0.55, 0, 1, 0)
     L.BackgroundTransparency = 1
-    L.Text = LabelText
+    L.Text = Label
     L.Font = Enum.Font.GothamMedium
     L.TextSize = 12
-    L.TextColor3 = COL.TextDim
+    L.TextColor3 = C.TextDim
     L.TextXAlignment = Enum.TextXAlignment.Left
-    L.Parent = Row
+    L.Parent = R
 
     local V = Instance.new("TextLabel")
-    V.Size = UDim2.new(0.4, 0, 1, 0)
-    V.Position = UDim2.new(0.6, 0, 0, 0)
+    V.Size = UDim2.new(0.45, 0, 1, 0)
+    V.Position = UDim2.new(0.55, 0, 0, 0)
     V.BackgroundTransparency = 1
-    V.Text = "0"
+    V.Text = "—"
     V.Font = Enum.Font.GothamBold
     V.TextSize = 12
-    V.TextColor3 = COL.Text
+    V.TextColor3 = C.Text
     V.TextXAlignment = Enum.TextXAlignment.Right
-    V.Parent = Row
+    V.Parent = R
 
     return V
 end
 
-local HopVal    = MakeStatRow("Hops", 1)
-local TimeVal   = MakeStatRow("Time on Server", 2)
-local AutoVal   = MakeStatRow("Execs (Auto)", 3)
-local ManualVal = MakeStatRow("Execs (Manual)", 4)
+local VersionVal = MakeRow("Version", 1)
+local HopVal     = MakeRow("Hops", 2)
+local TimeVal    = MakeRow("Time on Server", 3)
+local AutoVal    = MakeRow("Execs (Auto)", 4)
+local ManualVal  = MakeRow("Execs (Manual)", 5)
 
 local PersistOn = false
 
 local function MakeBtn(Text, YPos, Variant)
     local Btn = Instance.new("TextButton")
-    Btn.Size = UDim2.new(1, -24, 0, 36)
+    Btn.Size = UDim2.new(1, -24, 0, BTN_H)
     Btn.Position = UDim2.new(0, 12, 0, YPos)
-    Btn.BackgroundColor3 = COL.Card
+    Btn.BackgroundColor3 = C.Card
     Btn.Text = Text
-    Btn.TextColor3 = COL.Text
+    Btn.TextColor3 = C.Text
     Btn.Font = Enum.Font.GothamMedium
     Btn.TextSize = 13
     Btn.BorderSizePixel = 0
     Btn.AutoButtonColor = false
-    Btn.Parent = Panel
+    Btn.Parent = Body
 
-    local C = Instance.new("UICorner")
-    C.CornerRadius = UDim.new(0, 10)
-    C.Parent = Btn
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 10)
+    Corner.Parent = Btn
 
-    local S = Instance.new("UIStroke")
-    S.Color = COL.Stroke
-    S.Thickness = 1
-    S.Transparency = 0.3
-    S.Parent = Btn
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = C.Stroke
+    Stroke.Thickness = 1
+    Stroke.Transparency = 0.35
+    Stroke.Parent = Btn
 
-    local BaseBg = COL.Card
-    local BaseStroke = COL.Stroke
-    local BaseText = COL.Text
+    local BaseBg = C.Card
+    local BaseStroke = C.Stroke
 
     if Variant == "success" then
-        BaseBg = COL.SuccessBg
-        BaseStroke = COL.Success
-        BaseText = COL.Text
+        BaseBg = C.SuccessBg
+        BaseStroke = C.Success
     elseif Variant == "accent" then
-        BaseBg = COL.PurpleBg
-        BaseStroke = COL.Accent
-        BaseText = COL.Text
+        BaseBg = C.PurpleBg
+        BaseStroke = C.Accent
+    elseif Variant == "danger" then
+        BaseBg = C.DangerBg
+        BaseStroke = C.Danger
     end
 
     Btn.BackgroundColor3 = BaseBg
-    S.Color = BaseStroke
-    Btn.TextColor3 = BaseText
-
-    local function Restore()
-        local Bg = BaseBg
-        local St = BaseStroke
-        local Tx = BaseText
-        if Btn:GetAttribute("Toggle") and PersistOn then
-            Bg = COL.SuccessBg
-            St = COL.Success
-        end
-        TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Bg}):Play()
-        TweenService:Create(S, TweenInfo.new(0.15), {Color = St, Transparency = 0.3}):Play()
-        Btn.TextColor3 = Tx
-    end
+    Stroke.Color = BaseStroke
 
     Btn.MouseEnter:Connect(function()
-        TweenService:Create(Btn, TweenInfo.new(0.15), {
-            BackgroundColor3 = BaseBg:Lerp(Color3.fromRGB(255,255,255), 0.08)
+        TweenService:Create(Btn, TweenInfo.new(0.14), {
+            BackgroundColor3 = BaseBg:Lerp(Color3.fromRGB(255,255,255), 0.09)
         }):Play()
-        TweenService:Create(S, TweenInfo.new(0.15), {Color = COL.StrokeHot, Transparency = 0}):Play()
+        TweenService:Create(Stroke, TweenInfo.new(0.14), {Color = C.StrokeHot, Transparency = 0}):Play()
     end)
-    Btn.MouseLeave:Connect(Restore)
+    Btn.MouseLeave:Connect(function()
+        local Bg = BaseBg
+        local St = BaseStroke
+        if Btn:GetAttribute("Toggle") and PersistOn then
+            Bg = C.SuccessBg
+            St = C.Success
+        end
+        TweenService:Create(Btn, TweenInfo.new(0.14), {BackgroundColor3 = Bg}):Play()
+        TweenService:Create(Stroke, TweenInfo.new(0.14), {Color = St, Transparency = 0.35}):Play()
+    end)
 
-    return Btn, S
+    return Btn, Stroke
 end
 
-local HopBtn = MakeBtn("Server Hop", 166)
-local PersistBtn, PersistStroke = MakeBtn("Auto-Exec  Off", 208, "success")
+local BtnStartY = PAD + STATS_H + PAD
+
+local HopBtn = MakeBtn("Server Hop", BtnStartY)
+local PersistBtn, PersistStroke = MakeBtn("Auto-Exec  Off", BtnStartY + (BTN_H + BTN_GAP), "success")
 PersistBtn:SetAttribute("Toggle", true)
-local VersionBtn = MakeBtn("Change Version", 250, "accent")
-local RefreshBtn = MakeBtn("Refresh Stats", 292)
+local VersionBtn = MakeBtn("Change Version", BtnStartY + (BTN_H + BTN_GAP) * 2, "accent")
+local RefreshBtn = MakeBtn("Refresh Stats", BtnStartY + (BTN_H + BTN_GAP) * 3)
 
 local RefreshStats
 
@@ -739,12 +807,29 @@ local function ResetStats()
     Notify("Stats", "All Stats Reset", 3)
 end
 
+local function GetDisplayVersion()
+    if State.hasLennon and State.hasOn and State.hasAuto then return "both_auto" end
+    if State.hasLennon and State.hasOn then return "both" end
+    if State.hasLennon then return "lennon" end
+    if State.hasOn then return "on" end
+    return nil
+end
+
 RefreshStats = function()
     local S = ReadStats()
     HopVal.Text = tostring(S.hops)
     AutoVal.Text = tostring(S.execAuto)
     ManualVal.Text = tostring(S.execManual)
     TimeVal.Text = (os.time() - SESSION_START) .. "s"
+
+    local V = GetDisplayVersion()
+    if V and VInfo[V] then
+        VersionVal.Text = VInfo[V].name
+        VersionVal.TextColor3 = VInfo[V].color
+    else
+        VersionVal.Text = "Not Selected"
+        VersionVal.TextColor3 = C.TextFaint
+    end
 end
 
 RefreshStats()
@@ -779,6 +864,31 @@ UserInputService.InputEnded:Connect(function(Input)
         end
     end
 end)
+
+local Collapsed = ReadJson(COLLAPSED_FILE, {v = false}).v == true
+local function SetCollapsed(On)
+    Collapsed = On
+    WriteJson(COLLAPSED_FILE, {v = On})
+    Body.Visible = not On
+    Divider.Visible = not On
+    MinimizeBtn.Text = On and "+" or "–"
+    if On then
+        Panel.Size = UDim2.new(0, PANEL_W, 0, HEADER_H)
+    else
+        Panel.Size = UDim2.new(0, PANEL_W, 0, PANEL_H)
+    end
+end
+
+MinimizeBtn.MouseButton1Click:Connect(function()
+    SetCollapsed(not Collapsed)
+end)
+
+if Collapsed then
+    Body.Visible = false
+    Divider.Visible = false
+    MinimizeBtn.Text = "+"
+    Panel.Size = UDim2.new(0, PANEL_W, 0, HEADER_H)
+end
 
 local function WaitTeleportCooldown()
     local Elapsed = os.time() - ReadLastTeleport()
@@ -865,12 +975,12 @@ end
 local function ApplyAutoExecVisual(On)
     if On then
         PersistBtn.Text = "Auto-Exec  On"
-        TweenService:Create(PersistBtn, TweenInfo.new(0.2), {BackgroundColor3 = COL.SuccessBg}):Play()
-        TweenService:Create(PersistStroke, TweenInfo.new(0.2), {Color = COL.Success, Transparency = 0.2}):Play()
+        TweenService:Create(PersistBtn, TweenInfo.new(0.2), {BackgroundColor3 = C.SuccessBg}):Play()
+        TweenService:Create(PersistStroke, TweenInfo.new(0.2), {Color = C.Success, Transparency = 0.2}):Play()
     else
         PersistBtn.Text = "Auto-Exec  Off"
-        TweenService:Create(PersistBtn, TweenInfo.new(0.2), {BackgroundColor3 = COL.Card}):Play()
-        TweenService:Create(PersistStroke, TweenInfo.new(0.2), {Color = COL.Stroke, Transparency = 0.3}):Play()
+        TweenService:Create(PersistBtn, TweenInfo.new(0.2), {BackgroundColor3 = C.Card}):Play()
+        TweenService:Create(PersistStroke, TweenInfo.new(0.2), {Color = C.Stroke, Transparency = 0.35}):Play()
     end
 end
 
@@ -917,6 +1027,28 @@ PersistBtn.MouseButton1Click:Connect(function()
     end
 end)
 
+local function ApplyVersion(Goal)
+    local F = VFeatures[Goal]
+    if not F then return end
+
+    if F.lennon and not State.hasLennon then
+        TryLoad(LENNON_URL, "Lennon Hub")
+        State.hasLennon = true
+    end
+    if F.on and not State.hasOn then
+        TryLoad(ONHUB_URL, "ON Hub")
+        State.hasOn = true
+    end
+    if F.auto and not State.hasAuto then
+        StartLennonAutoClick()
+        State.hasAuto = true
+    end
+
+    local Achieved = GetDisplayVersion()
+    if Achieved then WriteSavedVersion(Achieved) end
+    pcall(RefreshStats)
+end
+
 local ModalOverlay = Instance.new("Frame")
 ModalOverlay.Size = UDim2.new(1, 0, 1, 0)
 ModalOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -929,7 +1061,7 @@ ModalOverlay.Parent = Gui
 local Modal = Instance.new("Frame")
 Modal.Size = UDim2.new(0, 300, 0, 340)
 Modal.Position = UDim2.new(0.5, -150, 0.5, -170)
-Modal.BackgroundColor3 = COL.Bg
+Modal.BackgroundColor3 = C.Bg
 Modal.BorderSizePixel = 0
 Modal.ZIndex = 51
 Modal.Parent = ModalOverlay
@@ -939,18 +1071,18 @@ ModalCorner.CornerRadius = UDim.new(0, 16)
 ModalCorner.Parent = Modal
 
 local ModalStroke = Instance.new("UIStroke")
-ModalStroke.Color = COL.Stroke
+ModalStroke.Color = C.Stroke
 ModalStroke.Thickness = 1
 ModalStroke.Transparency = 0.2
 ModalStroke.Parent = Modal
 
-local ModalGradient = Instance.new("UIGradient")
-ModalGradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, COL.BgTop),
-    ColorSequenceKeypoint.new(1, COL.Bg)
+local ModalGrad = Instance.new("UIGradient")
+ModalGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, C.BgTop),
+    ColorSequenceKeypoint.new(1, C.Bg)
 }
-ModalGradient.Rotation = 135
-ModalGradient.Parent = Modal
+ModalGrad.Rotation = 135
+ModalGrad.Parent = Modal
 
 local ModalHeader = Instance.new("Frame")
 ModalHeader.Size = UDim2.new(1, 0, 0, 46)
@@ -965,7 +1097,7 @@ ModalTitle.BackgroundTransparency = 1
 ModalTitle.Text = "Choose Your Version"
 ModalTitle.Font = Enum.Font.GothamBold
 ModalTitle.TextSize = 15
-ModalTitle.TextColor3 = COL.Text
+ModalTitle.TextColor3 = C.Text
 ModalTitle.TextXAlignment = Enum.TextXAlignment.Left
 ModalTitle.ZIndex = 53
 ModalTitle.Parent = ModalHeader
@@ -977,7 +1109,7 @@ ModalDesc.BackgroundTransparency = 1
 ModalDesc.Text = "Select Which Hub to Load"
 ModalDesc.Font = Enum.Font.Gotham
 ModalDesc.TextSize = 10
-ModalDesc.TextColor3 = COL.TextFaint
+ModalDesc.TextColor3 = C.TextFaint
 ModalDesc.TextXAlignment = Enum.TextXAlignment.Left
 ModalDesc.ZIndex = 53
 ModalDesc.Parent = ModalHeader
@@ -985,7 +1117,7 @@ ModalDesc.Parent = ModalHeader
 local ModalDivider = Instance.new("Frame")
 ModalDivider.Size = UDim2.new(1, -24, 0, 1)
 ModalDivider.Position = UDim2.new(0, 12, 0, 46)
-ModalDivider.BackgroundColor3 = COL.Stroke
+ModalDivider.BackgroundColor3 = C.Stroke
 ModalDivider.BackgroundTransparency = 0.4
 ModalDivider.BorderSizePixel = 0
 ModalDivider.ZIndex = 53
@@ -1005,8 +1137,8 @@ OptionsLayout.Parent = OptionsHolder
 
 local function MakeOptionCard(Title, Desc, Order, AccentColor)
     local Card = Instance.new("TextButton")
-    Card.Size = UDim2.new(1, 0, 0, 48)
-    Card.BackgroundColor3 = COL.Card
+    Card.Size = UDim2.new(1, 0, 0, 52)
+    Card.BackgroundColor3 = C.Card
     Card.Text = ""
     Card.AutoButtonColor = false
     Card.BorderSizePixel = 0
@@ -1014,19 +1146,19 @@ local function MakeOptionCard(Title, Desc, Order, AccentColor)
     Card.ZIndex = 53
     Card.Parent = OptionsHolder
 
-    local C = Instance.new("UICorner")
-    C.CornerRadius = UDim.new(0, 10)
-    C.Parent = Card
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 10)
+    Corner.Parent = Card
 
-    local S = Instance.new("UIStroke")
-    S.Color = COL.Stroke
-    S.Thickness = 1
-    S.Transparency = 0.3
-    S.Parent = Card
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = C.Stroke
+    Stroke.Thickness = 1
+    Stroke.Transparency = 0.35
+    Stroke.Parent = Card
 
     local Bar = Instance.new("Frame")
-    Bar.Size = UDim2.new(0, 3, 0, 24)
-    Bar.Position = UDim2.new(0, 10, 0.5, -12)
+    Bar.Size = UDim2.new(0, 3, 0, 26)
+    Bar.Position = UDim2.new(0, 10, 0.5, -13)
     Bar.BackgroundColor3 = AccentColor
     Bar.BorderSizePixel = 0
     Bar.ZIndex = 54
@@ -1037,52 +1169,52 @@ local function MakeOptionCard(Title, Desc, Order, AccentColor)
     BarCorner.Parent = Bar
 
     local T = Instance.new("TextLabel")
-    T.Size = UDim2.new(1, -40, 0, 16)
-    T.Position = UDim2.new(0, 24, 0, 9)
+    T.Size = UDim2.new(1, -30, 0, 16)
+    T.Position = UDim2.new(0, 24, 0, 10)
     T.BackgroundTransparency = 1
     T.Text = Title
     T.Font = Enum.Font.GothamBold
     T.TextSize = 13
-    T.TextColor3 = COL.Text
+    T.TextColor3 = C.Text
     T.TextXAlignment = Enum.TextXAlignment.Left
     T.ZIndex = 54
     T.Parent = Card
 
     local D = Instance.new("TextLabel")
-    D.Size = UDim2.new(1, -40, 0, 14)
-    D.Position = UDim2.new(0, 24, 0, 26)
+    D.Size = UDim2.new(1, -30, 0, 14)
+    D.Position = UDim2.new(0, 24, 0, 28)
     D.BackgroundTransparency = 1
     D.Text = Desc
     D.Font = Enum.Font.Gotham
     D.TextSize = 10
-    D.TextColor3 = COL.TextFaint
+    D.TextColor3 = C.TextFaint
     D.TextXAlignment = Enum.TextXAlignment.Left
     D.ZIndex = 54
     D.Parent = Card
 
     Card.MouseEnter:Connect(function()
-        TweenService:Create(Card, TweenInfo.new(0.15), {BackgroundColor3 = COL.CardHover}):Play()
-        TweenService:Create(S, TweenInfo.new(0.15), {Color = AccentColor, Transparency = 0.2}):Play()
-        TweenService:Create(Bar, TweenInfo.new(0.15), {Size = UDim2.new(0, 3, 0, 34)}):Play()
-        TweenService:Create(Bar, TweenInfo.new(0.15), {Position = UDim2.new(0, 10, 0.5, -17)}):Play()
+        TweenService:Create(Card, TweenInfo.new(0.15), {BackgroundColor3 = C.CardHover}):Play()
+        TweenService:Create(Stroke, TweenInfo.new(0.15), {Color = AccentColor, Transparency = 0.2}):Play()
+        TweenService:Create(Bar, TweenInfo.new(0.15), {Size = UDim2.new(0, 3, 0, 36)}):Play()
+        TweenService:Create(Bar, TweenInfo.new(0.15), {Position = UDim2.new(0, 10, 0.5, -18)}):Play()
     end)
     Card.MouseLeave:Connect(function()
-        TweenService:Create(Card, TweenInfo.new(0.15), {BackgroundColor3 = COL.Card}):Play()
-        TweenService:Create(S, TweenInfo.new(0.15), {Color = COL.Stroke, Transparency = 0.3}):Play()
-        TweenService:Create(Bar, TweenInfo.new(0.15), {Size = UDim2.new(0, 3, 0, 24)}):Play()
-        TweenService:Create(Bar, TweenInfo.new(0.15), {Position = UDim2.new(0, 10, 0.5, -12)}):Play()
+        TweenService:Create(Card, TweenInfo.new(0.15), {BackgroundColor3 = C.Card}):Play()
+        TweenService:Create(Stroke, TweenInfo.new(0.15), {Color = C.Stroke, Transparency = 0.35}):Play()
+        TweenService:Create(Bar, TweenInfo.new(0.15), {Size = UDim2.new(0, 3, 0, 26)}):Play()
+        TweenService:Create(Bar, TweenInfo.new(0.15), {Position = UDim2.new(0, 10, 0.5, -13)}):Play()
     end)
 
     return Card
 end
 
-local CardLennon   = MakeOptionCard("Lennon Hub",     "Only Lennon Hub",              1, Color3.fromRGB(140, 100, 220))
-local CardOn       = MakeOptionCard("ON Hub",         "Only ON Hub",                  2, Color3.fromRGB(80, 150, 230))
-local CardBoth     = MakeOptionCard("Both Hubs",      "Lennon + ON Together",         3, Color3.fromRGB(80, 200, 180))
-local CardBothAuto = MakeOptionCard("Both + Auto",    "Both + Lennon Auto-Click",     4, Color3.fromRGB(230, 150, 60))
+local CardLennon   = MakeOptionCard("Lennon Hub",  "Only Lennon Hub",          1, C.Purple)
+local CardOn       = MakeOptionCard("ON Hub",      "Only ON Hub",              2, C.Blue)
+local CardBoth     = MakeOptionCard("Both Hubs",   "Lennon + ON Together",     3, C.Cyan)
+local CardBothAuto = MakeOptionCard("Both + Auto", "Both + Lennon Auto-Click", 4, C.Orange)
 
 local ConfirmHolder = Instance.new("Frame")
-ConfirmHolder.Size = UDim2.new(1, -24, 0, 100)
+ConfirmHolder.Size = UDim2.new(1, -24, 0, 130)
 ConfirmHolder.Position = UDim2.new(0, 12, 0, 58)
 ConfirmHolder.BackgroundTransparency = 1
 ConfirmHolder.Visible = false
@@ -1090,19 +1222,19 @@ ConfirmHolder.ZIndex = 52
 ConfirmHolder.Parent = Modal
 
 local ConfirmIconBg = Instance.new("Frame")
-ConfirmIconBg.Size = UDim2.new(0, 44, 0, 44)
-ConfirmIconBg.Position = UDim2.new(0.5, -22, 0, 0)
-ConfirmIconBg.BackgroundColor3 = Color3.fromRGB(50, 30, 32)
+ConfirmIconBg.Size = UDim2.new(0, 48, 0, 48)
+ConfirmIconBg.Position = UDim2.new(0.5, -24, 0, 4)
+ConfirmIconBg.BackgroundColor3 = C.DangerBg
 ConfirmIconBg.BorderSizePixel = 0
 ConfirmIconBg.ZIndex = 53
 ConfirmIconBg.Parent = ConfirmHolder
 
-local ConfirmIconBgCorner = Instance.new("UICorner")
-ConfirmIconBgCorner.CornerRadius = UDim.new(1, 0)
-ConfirmIconBgCorner.Parent = ConfirmIconBg
+local ConfirmIconCorner = Instance.new("UICorner")
+ConfirmIconCorner.CornerRadius = UDim.new(1, 0)
+ConfirmIconCorner.Parent = ConfirmIconBg
 
 local ConfirmIconStroke = Instance.new("UIStroke")
-ConfirmIconStroke.Color = COL.Danger
+ConfirmIconStroke.Color = C.Danger
 ConfirmIconStroke.Thickness = 1.2
 ConfirmIconStroke.Transparency = 0.3
 ConfirmIconStroke.Parent = ConfirmIconBg
@@ -1112,36 +1244,36 @@ ConfirmIcon.Size = UDim2.new(1, 0, 1, 0)
 ConfirmIcon.BackgroundTransparency = 1
 ConfirmIcon.Text = "!"
 ConfirmIcon.Font = Enum.Font.GothamBold
-ConfirmIcon.TextSize = 22
-ConfirmIcon.TextColor3 = COL.Danger
+ConfirmIcon.TextSize = 24
+ConfirmIcon.TextColor3 = C.Danger
 ConfirmIcon.ZIndex = 54
 ConfirmIcon.Parent = ConfirmIconBg
 
 local ConfirmTitle = Instance.new("TextLabel")
 ConfirmTitle.Size = UDim2.new(1, 0, 0, 22)
-ConfirmTitle.Position = UDim2.new(0, 0, 0, 52)
+ConfirmTitle.Position = UDim2.new(0, 0, 0, 60)
 ConfirmTitle.BackgroundTransparency = 1
 ConfirmTitle.Text = "Are You Sure?"
 ConfirmTitle.Font = Enum.Font.GothamBold
 ConfirmTitle.TextSize = 15
-ConfirmTitle.TextColor3 = COL.Text
+ConfirmTitle.TextColor3 = C.Text
 ConfirmTitle.ZIndex = 53
 ConfirmTitle.Parent = ConfirmHolder
 
 local ConfirmDesc = Instance.new("TextLabel")
 ConfirmDesc.Size = UDim2.new(1, 0, 0, 16)
-ConfirmDesc.Position = UDim2.new(0, 0, 0, 74)
+ConfirmDesc.Position = UDim2.new(0, 0, 0, 82)
 ConfirmDesc.BackgroundTransparency = 1
 ConfirmDesc.Text = ""
 ConfirmDesc.Font = Enum.Font.Gotham
 ConfirmDesc.TextSize = 11
-ConfirmDesc.TextColor3 = COL.TextDim
+ConfirmDesc.TextColor3 = C.TextDim
 ConfirmDesc.ZIndex = 53
 ConfirmDesc.Parent = ConfirmHolder
 
 local ConfirmButtons = Instance.new("Frame")
-ConfirmButtons.Size = UDim2.new(1, -24, 0, 40)
-ConfirmButtons.Position = UDim2.new(0, 12, 1, -52)
+ConfirmButtons.Size = UDim2.new(1, -24, 0, 42)
+ConfirmButtons.Position = UDim2.new(0, 12, 1, -54)
 ConfirmButtons.BackgroundTransparency = 1
 ConfirmButtons.ZIndex = 52
 ConfirmButtons.Parent = Modal
@@ -1156,7 +1288,7 @@ local function MakeModalBtn(Text, Bg, Border, Order)
     B.Size = UDim2.new(0.5, -4, 1, 0)
     B.BackgroundColor3 = Bg
     B.Text = Text
-    B.TextColor3 = COL.Text
+    B.TextColor3 = C.Text
     B.Font = Enum.Font.GothamBold
     B.TextSize = 12
     B.BorderSizePixel = 0
@@ -1164,14 +1296,14 @@ local function MakeModalBtn(Text, Bg, Border, Order)
     B.LayoutOrder = Order
     B.ZIndex = 53
     B.Parent = ConfirmButtons
-    local C = Instance.new("UICorner")
-    C.CornerRadius = UDim.new(0, 10)
-    C.Parent = B
-    local S = Instance.new("UIStroke")
-    S.Color = Border
-    S.Thickness = 1
-    S.Transparency = 0.3
-    S.Parent = B
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 10)
+    Corner.Parent = B
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = Border
+    Stroke.Thickness = 1
+    Stroke.Transparency = 0.3
+    Stroke.Parent = B
     B.MouseEnter:Connect(function()
         TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Bg:Lerp(Color3.fromRGB(255,255,255), 0.1)}):Play()
     end)
@@ -1181,44 +1313,16 @@ local function MakeModalBtn(Text, Bg, Border, Order)
     return B
 end
 
-local ConfirmYes = MakeModalBtn("Confirm", COL.DangerBg, COL.Danger, 1)
-local ConfirmNo  = MakeModalBtn("Cancel",  COL.Card,     COL.Stroke, 2)
+local ConfirmYes = MakeModalBtn("Confirm", C.DangerBg, C.Danger, 1)
+local ConfirmNo  = MakeModalBtn("Cancel",  C.Card,     C.Stroke, 2)
 
 local PendingVersion = nil
 local PendingAction = nil
-local LennonAutoStarted = false
-
-local VersionNames = {
-    lennon = "Lennon Hub",
-    on = "ON Hub",
-    both = "Both Hubs",
-    both_auto = "Both Hubs + Lennon Auto"
-}
-
-local function ApplyVersion(V)
-    WriteVersion(V)
-    if V == "lennon" then
-        TryLoad(LENNON_URL, "Lennon Hub")
-    elseif V == "on" then
-        TryLoad(ONHUB_URL, "ON Hub")
-    elseif V == "both" then
-        TryLoad(LENNON_URL, "Lennon Hub")
-        task.wait(0.6)
-        TryLoad(ONHUB_URL, "ON Hub")
-    elseif V == "both_auto" then
-        TryLoad(LENNON_URL, "Lennon Hub")
-        task.wait(0.6)
-        TryLoad(ONHUB_URL, "ON Hub")
-        if not LennonAutoStarted then
-            LennonAutoStarted = true
-            StartLennonAutoClick()
-            Notify("Lennon Hub", "Auto-Click Started", 4)
-        end
-    end
-end
 
 local function ShowPicker()
     ModalOverlay.Visible = true
+    Modal.Size = UDim2.new(0, 300, 0, 340)
+    Modal.Position = UDim2.new(0.5, -150, 0.5, -170)
     OptionsHolder.Visible = true
     ConfirmHolder.Visible = false
     ConfirmButtons.Visible = false
@@ -1230,12 +1334,13 @@ end
 
 local function ShowConfirm(Title, Desc, Action, V)
     ModalOverlay.Visible = true
+    Modal.Size = UDim2.new(0, 300, 0, 240)
+    Modal.Position = UDim2.new(0.5, -150, 0.5, -120)
     OptionsHolder.Visible = false
     ConfirmHolder.Visible = true
     ConfirmButtons.Visible = true
     ModalTitle.Text = Title
     ModalDesc.Text = ""
-    ConfirmTitle.Text = Title
     ConfirmDesc.Text = Desc
     PendingAction = Action
     PendingVersion = V
@@ -1243,10 +1348,12 @@ end
 
 local function HideModal()
     ModalOverlay.Visible = false
+    PendingAction = nil
+    PendingVersion = nil
 end
 
 local function AskVersion(V)
-    ShowConfirm("Are You Sure?", "Use " .. (VersionNames[V] or V) .. "?", "version", V)
+    ShowConfirm("Are You Sure?", "Use " .. (VInfo[V] and VInfo[V].name or V) .. "?", "version", V)
 end
 
 CardLennon.MouseButton1Click:Connect(function() AskVersion("lennon") end)
@@ -1255,18 +1362,17 @@ CardBoth.MouseButton1Click:Connect(function() AskVersion("both") end)
 CardBothAuto.MouseButton1Click:Connect(function() AskVersion("both_auto") end)
 
 ConfirmYes.MouseButton1Click:Connect(function()
-    if PendingAction == "version" and PendingVersion then
-        local V = PendingVersion
+    local Action = PendingAction
+    local V = PendingVersion
+    if Action == "version" and V then
         HideModal()
-        ApplyVersion(V)
-    elseif PendingAction == "reset" then
+        task.spawn(function() ApplyVersion(V) end)
+    elseif Action == "reset" then
         HideModal()
         ResetStats()
     else
         HideModal()
     end
-    PendingAction = nil
-    PendingVersion = nil
 end)
 
 ConfirmNo.MouseButton1Click:Connect(function()
@@ -1277,9 +1383,7 @@ ConfirmNo.MouseButton1Click:Connect(function()
     end
 end)
 
-VersionBtn.MouseButton1Click:Connect(function()
-    ShowPicker()
-end)
+VersionBtn.MouseButton1Click:Connect(ShowPicker)
 
 RefreshBtn.MouseButton1Click:Connect(function()
     ShowConfirm("Are You Sure?", "This Will Reset All Stats", "reset")
@@ -1297,10 +1401,10 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    task.wait(1)
-    local Saved = ReadVersion()
-    if Saved then
-        ApplyVersion(Saved)
+    task.wait(0.6)
+    if WasAuto then
+        local Saved = ReadSavedVersion()
+        if Saved then ApplyVersion(Saved) end
     else
         ShowPicker()
     end
