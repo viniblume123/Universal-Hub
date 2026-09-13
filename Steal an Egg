@@ -52,8 +52,7 @@ local C = {
     Cyan        = Color3.fromRGB(80, 210, 190),
     CyanBg      = Color3.fromRGB(26, 56, 54),
     Orange      = Color3.fromRGB(240, 160, 70),
-    OrangeBg    = Color3.fromRGB(60, 42, 22),
-    Grey        = Color3.fromRGB(140, 140, 160)
+    OrangeBg    = Color3.fromRGB(60, 42, 22)
 }
 
 local VInfo = {
@@ -262,7 +261,7 @@ local function GetGuiContainers()
     return Containers
 end
 
-local Keywords = {"LOOP", "AUTO", "FARM", "TELEPORT", "TOGGLE", "ENABLE", "START"}
+local Keywords = {"LOOP", "AUTO", "FARM", "TELEPORT", "TOGGLE", "ENABLE", "START", "ACTIVATE", "ON"}
 
 local function IsRoundish(Obj)
     local Corner = Obj:FindFirstChildOfClass("UICorner")
@@ -350,14 +349,21 @@ local function TryClickLennonToggle()
     return false
 end
 
+local function WaitForExactMultiple()
+    local Now = os.time()
+    local Remainder = Now % 5
+    local WaitTime = (5 - Remainder) % 5
+    if WaitTime == 0 then WaitTime = 5 end
+    task.wait(WaitTime)
+end
+
 local function StartLennonAutoClick()
     if State.autoRunning then return end
     State.autoRunning = true
     task.spawn(function()
         local FailCount = 0
         while true do
-            local ToAlign = (5 - (os.time() % 5)) % 5
-            task.wait(ToAlign)
+            WaitForExactMultiple()
             task.wait(3)
             local Ok = TryClickLennonToggle()
             if Ok then
@@ -482,6 +488,34 @@ local function FindBestServer()
     return nil
 end
 
+local function MakeDraggable(Frame, DragArea)
+    local Dragging = false
+    local DragStart, StartPos
+    DragArea.InputBegan:Connect(function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+            Dragging = true
+            DragStart = Input.Position
+            StartPos = Frame.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(Input)
+        if Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+            local Delta = Input.Position - DragStart
+            Frame.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + Delta.X, StartPos.Y.Scale, StartPos.Y.Offset + Delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+            if Dragging then
+                Dragging = false
+                if Frame == Panel then
+                    WritePos(Frame.Position)
+                end
+            end
+        end
+    end)
+end
+
 pcall(function()
     for _, P in ipairs(GetGuiContainers()) do
         if P then
@@ -512,7 +546,7 @@ if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 local PANEL_W = 262
 local HEADER_H = 44
 local DIVIDER_H = 1
-local STATS_H = 128
+local STATS_H = 140
 local BTN_H = 38
 local BTN_GAP = 8
 local PAD = 12
@@ -762,9 +796,6 @@ local function MakeBtn(Text, YPos, Variant)
     elseif Variant == "accent" then
         BaseBg = C.PurpleBg
         BaseStroke = C.Accent
-    elseif Variant == "danger" then
-        BaseBg = C.DangerBg
-        BaseStroke = C.Danger
     end
 
     Btn.BackgroundColor3 = BaseBg
@@ -841,29 +872,7 @@ task.spawn(function()
     end
 end)
 
-local Dragging = false
-local DragStart, StartPos
-DragArea.InputBegan:Connect(function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-        Dragging = true
-        DragStart = Input.Position
-        StartPos = Panel.Position
-    end
-end)
-UserInputService.InputChanged:Connect(function(Input)
-    if Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
-        local Delta = Input.Position - DragStart
-        Panel.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + Delta.X, StartPos.Y.Scale, StartPos.Y.Offset + Delta.Y)
-    end
-end)
-UserInputService.InputEnded:Connect(function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-        if Dragging then
-            Dragging = false
-            WritePos(Panel.Position)
-        end
-    end
-end)
+MakeDraggable(Panel, DragArea)
 
 local Collapsed = ReadJson(COLLAPSED_FILE, {v = false}).v == true
 local function SetCollapsed(On)
@@ -1122,6 +1131,17 @@ ModalDivider.BackgroundTransparency = 0.4
 ModalDivider.BorderSizePixel = 0
 ModalDivider.ZIndex = 53
 ModalDivider.Parent = Modal
+
+local ModalDragArea = Instance.new("TextButton")
+ModalDragArea.Size = UDim2.new(1, 0, 0, 46)
+ModalDragArea.Position = UDim2.new(0, 0, 0, 0)
+ModalDragArea.BackgroundTransparency = 1
+ModalDragArea.Text = ""
+ModalDragArea.AutoButtonColor = false
+ModalDragArea.ZIndex = 54
+ModalDragArea.Parent = Modal
+
+MakeDraggable(Modal, ModalDragArea)
 
 local OptionsHolder = Instance.new("Frame")
 OptionsHolder.Size = UDim2.new(1, -24, 1, -120)
