@@ -21,7 +21,8 @@ local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
 local GUI_NAME = "SAE_Hub_UI"
-local LOOP_INTERVAL_MIN = 5
+local LOOP_START_DELAY = 3
+local LOOP_INTERVAL = 60
 
 task.spawn(function()
     pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
@@ -599,18 +600,11 @@ task.spawn(function()
         return ok
     end
 
-    local lastKey = -1
+    task.wait(LOOP_START_DELAY)
+
     while true do
-        local now = os.date("*t")
-        local slotMin = now.min - (now.min % LOOP_INTERVAL_MIN)
-        local key = now.hour * 60 + slotMin
-        if now.min % LOOP_INTERVAL_MIN == 0 and now.sec <= 3 and key ~= lastKey then
-            local btn = findLoopButton()
-            if btn then
-                pressBtn(btn)
-                lastKey = key
-            end
-        end
-        task.wait(0.2)
+        local btn = findLoopButton()
+        if btn then pressBtn(btn) end
+        task.wait(LOOP_INTERVAL)
     end
 end)
