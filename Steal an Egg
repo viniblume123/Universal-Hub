@@ -3,6 +3,8 @@ local ONHUB_URL = "https://raw.githubusercontent.com/davizin713/ONhub/refs/heads
 local ANTISAE_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/anti%20(steal%20an%20egg)"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
+local ALLOWED_PLACE_ID = 107778070777162
+
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local TeleportService = game:GetService("TeleportService")
@@ -10,6 +12,7 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
+local StarterGui = game:GetService("StarterGui")
 
 local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 600
@@ -19,217 +22,208 @@ local TELEPORT_FILE = "sae_last_teleport.json"
 local POS_FILE = "sae_ui_pos.json"
 local STATS_FILE = "sae_stats.json"
 local WAS_AUTO_FILE = "sae_was_auto.json"
+local VERSION_FILE = "sae_version.json"
 local TELEPORT_COOLDOWN = 5
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
 local GUI_NAME = "SAE_Hub_UI"
 
-task.spawn(function()
-    pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
-end)
-task.spawn(function()
-    pcall(function() loadstring(game:HttpGet(ONHUB_URL, true))() end)
-end)
-task.spawn(function()
-    pcall(function() loadstring(game:HttpGet(ANTISAE_URL))() end)
-end)
-
--- === ANTI-AFK (sem VirtualUser) ===
-pcall(function()
-    LocalPlayer.Idled:Connect(function() end)
-end)
-
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
+local queueFunc = queue_on_teleport
+    or (syn and syn.queue_on_teleport)
+    or (fluxus and fluxus.queue_on_teleport)
+    or queueonteleport
 
-local function httpGet(url)
+local function Notify(Title, Text, Duration)
+    Duration = Duration or 4
+    if notify then
+        pcall(notify, Title, Text, Duration)
+    else
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = Title, Text = Text, Duration = Duration
+            })
+        end)
+    end
+end
+
+pcall(function() LocalPlayer.Idled:Connect(function() end) end)
+
+local function HttpGet(Url)
     if REQUEST then
-        local ok, res = pcall(REQUEST, {Url = url, Method = "GET"})
-        if ok and type(res) == "table" and res.Body and res.Body ~= "" then
-            return res.Body
+        local Ok, Res = pcall(REQUEST, {Url = Url, Method = "GET"})
+        if Ok and type(Res) == "table" and Res.Body and Res.Body ~= "" then
+            return Res.Body
         end
     end
-    local ok, res = pcall(function() return game:HttpGet(url) end)
-    if ok and res and res ~= "" then return res end
+    local Ok, Res = pcall(function() return game:HttpGet(Url) end)
+    if Ok and Res and Res ~= "" then return Res end
     return nil
 end
 
-local function httpGetRetry(url, tries)
-    tries = tries or 3
-    for i = 1, tries do
-        local res = httpGet(url)
-        if res and res ~= "" then return res end
-        if i < tries then task.wait(0.3) end
+local function HttpGetRetry(Url, Tries)
+    Tries = Tries or 3
+    for I = 1, Tries do
+        local Res = HttpGet(Url)
+        if Res and Res ~= "" then return Res end
+        if I < Tries then task.wait(0.3) end
     end
     return nil
 end
 
-local function readVisited()
-    local data = {}
-    if isfile and isfile(STORAGE_FILE) then
-        local ok, content = pcall(readfile, STORAGE_FILE)
-        if ok and content then
-            local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-            if ok2 and type(parsed) == "table" then data = parsed end
-        end
-    end
-    local now = os.time()
-    for k, v in pairs(data) do
-        if type(v) ~= "number" or (now - v) >= COOLDOWN_TIME then data[k] = nil end
-    end
-    return data
+local function ReadJson(Path, Default)
+    if not isfile or not isfile(Path) then return Default end
+    local Ok, Content = pcall(readfile, Path)
+    if not Ok or not Content then return Default end
+    local Ok2, Parsed = pcall(HttpService.JSONDecode, HttpService, Content)
+    if Ok2 and type(Parsed) == "table" then return Parsed end
+    return Default
 end
 
-local function writeVisited(data)
-    if writefile then pcall(writefile, STORAGE_FILE, HttpService:JSONEncode(data)) end
+local function WriteJson(Path, Data)
+    if writefile then pcall(writefile, Path, HttpService:JSONEncode(Data)) end
 end
 
-local visited = readVisited()
-visited[game.JobId] = os.time()
-writeVisited(visited)
+local function ReadVisited()
+    local Data = ReadJson(STORAGE_FILE, {})
+    local Now = os.time()
+    for K, V in pairs(Data) do
+        if type(V) ~= "number" or (Now - V) >= COOLDOWN_TIME then Data[K] = nil end
+    end
+    return Data
+end
 
-local function isBlocked(jobId)
-    local t = visited[jobId]
-    if not t then return false end
-    if (os.time() - t) >= COOLDOWN_TIME then
-        visited[jobId] = nil
-        writeVisited(visited)
+local Visited = ReadVisited()
+Visited[game.JobId] = os.time()
+WriteJson(STORAGE_FILE, Visited)
+
+local function IsBlocked(JobId)
+    local T = Visited[JobId]
+    if not T then return false end
+    if (os.time() - T) >= COOLDOWN_TIME then
+        Visited[JobId] = nil
+        WriteJson(STORAGE_FILE, Visited)
         return false
     end
     return true
 end
 
-local function markVisited(jobId)
-    if jobId and jobId ~= "" then
-        visited[jobId] = os.time()
-        writeVisited(visited)
+local function MarkVisited(JobId)
+    if JobId and JobId ~= "" then
+        Visited[JobId] = os.time()
+        WriteJson(STORAGE_FILE, Visited)
     end
 end
 
-local function readAutoExec()
-    if not isfile or not isfile(AUTOEXEC_FILE) then return false end
-    local ok, content = pcall(readfile, AUTOEXEC_FILE)
-    if not ok or not content then return false end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" then return parsed.on == true end
-    return false
+local function ReadAutoExec()
+    local D = ReadJson(AUTOEXEC_FILE, {on = false})
+    return D.on == true
 end
 
-local function writeAutoExec(on)
-    if writefile then pcall(writefile, AUTOEXEC_FILE, HttpService:JSONEncode({on = on})) end
+local function WriteAutoExec(On)
+    WriteJson(AUTOEXEC_FILE, {on = On})
 end
 
-local function readLastTeleport()
-    if not isfile or not isfile(TELEPORT_FILE) then return 0 end
-    local ok, content = pcall(readfile, TELEPORT_FILE)
-    if not ok or not content then return 0 end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" and type(parsed.t) == "number" then
-        return parsed.t
-    end
-    return 0
+local function ReadLastTeleport()
+    local D = ReadJson(TELEPORT_FILE, {t = 0})
+    return D.t or 0
 end
 
-local function writeLastTeleport(t)
-    if writefile then pcall(writefile, TELEPORT_FILE, HttpService:JSONEncode({t = t})) end
+local function WriteLastTeleport(T)
+    WriteJson(TELEPORT_FILE, {t = T})
 end
 
-local function readPos()
-    if not isfile or not isfile(POS_FILE) then return nil end
-    local ok, content = pcall(readfile, POS_FILE)
-    if not ok or not content then return nil end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" and type(parsed.x) == "number" and type(parsed.y) == "number" then
-        return UDim2.new(parsed.xs or 0.5, parsed.x, parsed.ys or 0.78, parsed.y)
-    end
-    return nil
+local function ReadPos()
+    local D = ReadJson(POS_FILE, nil)
+    if not D or type(D.x) ~= "number" or type(D.y) ~= "number" then return nil end
+    return UDim2.new(D.xs or 0.5, D.x, D.ys or 0.72, D.y)
 end
 
-local function writePos(pos)
-    if writefile then
-        pcall(writefile, POS_FILE, HttpService:JSONEncode({
-            xs = pos.X.Scale, x = pos.X.Offset,
-            ys = pos.Y.Scale, y = pos.Y.Offset
-        }))
-    end
+local function WritePos(Pos)
+    WriteJson(POS_FILE, {
+        xs = Pos.X.Scale, x = Pos.X.Offset,
+        ys = Pos.Y.Scale, y = Pos.Y.Offset
+    })
 end
 
--- === STATS ===
-local function defaultStats()
+local function DefaultStats()
     return {hops = 0, execAuto = 0, execManual = 0}
 end
 
-local function readStats()
-    local d = defaultStats()
-    if not isfile or not isfile(STATS_FILE) then return d end
-    local ok, content = pcall(readfile, STATS_FILE)
-    if not ok or not content then return d end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" then
-        for k, v in pairs(d) do
-            if type(parsed[k]) == "number" then d[k] = parsed[k] end
+local function ReadStats()
+    local D = DefaultStats()
+    local P = ReadJson(STATS_FILE, nil)
+    if P then
+        for K, V in pairs(D) do
+            if type(P[K]) == "number" then D[K] = P[K] end
         end
     end
-    return d
+    return D
 end
 
-local function writeStats(s)
-    if writefile then pcall(writefile, STATS_FILE, HttpService:JSONEncode(s)) end
+local function WriteStats(S)
+    WriteJson(STATS_FILE, S)
 end
 
--- detecta se esta execução veio do auto-exec (loader escreve marker antes de carregar)
-local function consumeWasAuto()
+local function ConsumeWasAuto()
     if not isfile or not isfile(WAS_AUTO_FILE) then return false end
-    local ok, content = pcall(readfile, WAS_AUTO_FILE)
-    if not ok or content ~= "1" then return false end
-    if delfile then
-        pcall(delfile, WAS_AUTO_FILE)
-    elseif writefile then
-        pcall(writefile, WAS_AUTO_FILE, "0")
-    end
+    local Ok, Content = pcall(readfile, WAS_AUTO_FILE)
+    if not Ok or Content ~= "1" then return false end
+    if delfile then pcall(delfile, WAS_AUTO_FILE)
+    elseif writefile then pcall(writefile, WAS_AUTO_FILE, "0") end
     return true
+end
+
+local function ReadVersion()
+    local D = ReadJson(VERSION_FILE, nil)
+    if not D or type(D.version) ~= "string" then return nil end
+    if D.version ~= "lennon" and D.version ~= "on" then return nil end
+    return D.version
+end
+
+local function WriteVersion(V)
+    WriteJson(VERSION_FILE, {version = V})
 end
 
 local SESSION_START = os.time()
 
 do
-    local wasAuto = consumeWasAuto()
-    local s = readStats()
-    if wasAuto then s.execAuto = s.execAuto + 1
-    else s.execManual = s.execManual + 1 end
-    writeStats(s)
+    local WasAuto = ConsumeWasAuto()
+    local S = ReadStats()
+    if WasAuto then S.execAuto = S.execAuto + 1
+    else S.execManual = S.execManual + 1 end
+    WriteStats(S)
 end
 
--- === Friend cache / server finding (inalterado) ===
-local friendCache = {ids = nil, time = 0}
+local FriendCache = {ids = nil, time = 0}
 
-local function getFriendGameIds()
-    if friendCache.ids and (os.time() - friendCache.time) < FRIEND_CACHE_TIME then
-        return friendCache.ids
+local function GetFriendGameIds()
+    if FriendCache.ids and (os.time() - FriendCache.time) < FRIEND_CACHE_TIME then
+        return FriendCache.ids
     end
-    local ids = {}
+    local Ids = {}
     if REQUEST then
-        local res = httpGetRetry("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends", 2)
-        if res then
-            local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-            if ok and data and data.data then
-                local list = {}
-                for _, f in ipairs(data.data) do table.insert(list, f.id) end
-                for i = 1, #list, 100 do
-                    local batch = {}
-                    for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
-                    local body = HttpService:JSONEncode({userIds = batch})
-                    local ok2, res2 = pcall(REQUEST, {
+        local Res = HttpGetRetry("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends", 2)
+        if Res then
+            local Ok, Data = pcall(HttpService.JSONDecode, HttpService, Res)
+            if Ok and Data and Data.data then
+                local List = {}
+                for _, F in ipairs(Data.data) do table.insert(List, F.id) end
+                for I = 1, #List, 100 do
+                    local Batch = {}
+                    for J = I, math.min(I + 99, #List) do table.insert(Batch, List[J]) end
+                    local Body = HttpService:JSONEncode({userIds = Batch})
+                    local Ok2, Res2 = pcall(REQUEST, {
                         Url = "https://presence.roblox.com/v1/presence/users",
-                        Method = "POST",
-                        Body = body,
+                        Method = "POST", Body = Body,
                         Headers = {["Content-Type"] = "application/json"}
                     })
-                    if ok2 and res2 and res2.Body then
-                        local ok3, pres = pcall(HttpService.JSONDecode, HttpService, res2.Body)
-                        if ok3 and pres and pres.userPresences then
-                            for _, p in ipairs(pres.userPresences) do
-                                if p.gameId and p.gameId ~= "" then ids[p.gameId] = true end
+                    if Ok2 and Res2 and Res2.Body then
+                        local Ok3, Pres = pcall(HttpService.JSONDecode, HttpService, Res2.Body)
+                        if Ok3 and Pres and Pres.userPresences then
+                            for _, P in ipairs(Pres.userPresences) do
+                                if P.gameId and P.gameId ~= "" then Ids[P.gameId] = true end
                             end
                         end
                     end
@@ -237,94 +231,203 @@ local function getFriendGameIds()
             end
         end
     end
-    friendCache.ids = ids
-    friendCache.time = os.time()
-    return ids
+    FriendCache.ids = Ids
+    FriendCache.time = os.time()
+    return Ids
 end
 
-local function fetchPage(cursor, sortOrder)
-    sortOrder = sortOrder or "Asc"
-    local url = "https://games.roblox.com/v1/games/" .. PLACE_ID ..
-                "/servers/Public?sortOrder=" .. sortOrder .. "&limit=100"
-    if cursor and cursor ~= "" then
-        url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+local function FetchPage(Cursor, SortOrder)
+    SortOrder = SortOrder or "Asc"
+    local Url = "https://games.roblox.com/v1/games/" .. PLACE_ID ..
+                "/servers/Public?sortOrder=" .. SortOrder .. "&limit=100"
+    if Cursor and Cursor ~= "" then
+        Url = Url .. "&cursor=" .. HttpService:UrlEncode(Cursor)
     end
-    local res = httpGetRetry(url, 3)
-    if not res then return nil end
-    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
-    if not ok or type(data) ~= "table" then return nil end
-    return data
+    local Res = HttpGetRetry(Url, 3)
+    if not Res then return nil end
+    local Ok, Data = pcall(HttpService.JSONDecode, HttpService, Res)
+    if not Ok or type(Data) ~= "table" then return nil end
+    return Data
 end
 
-local function collectCandidates(filterFn, friendIds, sortOrder)
-    local candidates = {}
-    local cursor = nil
-    local pages = 0
-    while pages < MAX_PAGES do
-        pages = pages + 1
-        local data = fetchPage(cursor, sortOrder)
-        if not data or not data.data then break end
-        for _, sv in ipairs(data.data) do
-            if sv.id and sv.id ~= game.JobId and sv.playing < sv.maxPlayers then
-                if filterFn(sv, friendIds) then
-                    table.insert(candidates, sv)
-                end
+local function CollectCandidates(FilterFn, FriendIds, SortOrder)
+    local Candidates = {}
+    local Cursor = nil
+    local Pages = 0
+    while Pages < MAX_PAGES do
+        Pages = Pages + 1
+        local Data = FetchPage(Cursor, SortOrder)
+        if not Data or not Data.data then break end
+        for _, Sv in ipairs(Data.data) do
+            if Sv.id and Sv.id ~= game.JobId and Sv.playing < Sv.maxPlayers then
+                if FilterFn(Sv, FriendIds) then table.insert(Candidates, Sv) end
             end
         end
-        cursor = data.nextPageCursor
-        if not cursor or cursor == "" then break end
-        if #candidates >= 25 then break end
+        Cursor = Data.nextPageCursor
+        if not Cursor or Cursor == "" then break end
+        if #Candidates >= 25 then break end
     end
-    return candidates
+    return Candidates
 end
 
-local function pickBest(candidates)
-    table.sort(candidates, function(a, b)
-        if a.playing ~= b.playing then return a.playing < b.playing end
-        return (a.ping or 999) < (b.ping or 999)
+local function PickBest(Candidates)
+    table.sort(Candidates, function(A, B)
+        if A.playing ~= B.playing then return A.playing < B.playing end
+        return (A.ping or 999) < (B.ping or 999)
     end)
-    local poolSize = math.min(5, #candidates)
-    return candidates[math.random(1, poolSize)]
+    local PoolSize = math.min(5, #Candidates)
+    return Candidates[math.random(1, PoolSize)]
 end
 
-local function findBestServer()
-    local friendIds = getFriendGameIds()
-    local orders = {"Asc", "Desc"}
+local function FindBestServer()
+    local FriendIds = GetFriendGameIds()
+    local Orders = {"Asc", "Desc"}
 
-    for _, order in ipairs(orders) do
-        local c = collectCandidates(function(sv, f)
-            return not isBlocked(sv.id) and not f[sv.id]
-        end, friendIds, order)
-        if #c > 0 then return pickBest(c) end
+    for _, Order in ipairs(Orders) do
+        local C = CollectCandidates(function(Sv, F)
+            return not IsBlocked(Sv.id) and not F[Sv.id]
+        end, FriendIds, Order)
+        if #C > 0 then return PickBest(C) end
     end
 
-    for _, order in ipairs(orders) do
-        local c = collectCandidates(function(sv, f)
-            return not f[sv.id]
-        end, friendIds, order)
-        if #c > 0 then return pickBest(c) end
+    for _, Order in ipairs(Orders) do
+        local C = CollectCandidates(function(Sv, F)
+            return not F[Sv.id]
+        end, FriendIds, Order)
+        if #C > 0 then return PickBest(C) end
     end
 
-    for _, order in ipairs(orders) do
-        local c = collectCandidates(function() return true end, friendIds, order)
-        if #c > 0 then return pickBest(c) end
+    for _, Order in ipairs(Orders) do
+        local C = CollectCandidates(function() return true end, FriendIds, Order)
+        if #C > 0 then return PickBest(C) end
     end
 
     return nil
 end
 
-pcall(function()
-    local parents = {CoreGui}
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if pg then table.insert(parents, pg) end
+local function GetGuiContainers()
+    local Containers = {CoreGui}
+    local Pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if Pg then table.insert(Containers, Pg) end
     if gethui then
-        local ok, hui = pcall(gethui)
-        if ok and hui then table.insert(parents, hui) end
+        local Ok, Hui = pcall(gethui)
+        if Ok and Hui then table.insert(Containers, Hui) end
     end
-    for _, p in ipairs(parents) do
-        if p then
-            local old = p:FindFirstChild(GUI_NAME)
-            if old then pcall(function() old:Destroy() end) end
+    return Containers
+end
+
+local function FindLennonRoot()
+    for _, Container in ipairs(GetGuiContainers()) do
+        local Ok, Descendants = pcall(function() return Container:GetDescendants() end)
+        if Ok and Descendants then
+            for _, Obj in ipairs(Descendants) do
+                if Obj:IsA("TextLabel") and type(Obj.Text) == "string" then
+                    if Obj.Text:upper():find("LENNON") then
+                        local Root = Obj
+                        while Root.Parent and Root.Parent ~= Container do
+                            Root = Root.Parent
+                        end
+                        if Root and Root.Parent == Container then
+                            return Root
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function FireClick(Btn)
+    if not Btn then return false end
+    if Btn:IsA("TextButton") or Btn:IsA("ImageButton") then
+        if firesignal then
+            return pcall(firesignal, Btn.MouseButton1Click)
+        end
+        return pcall(function() Btn:Activate() end)
+    end
+    return false
+end
+
+local function TryClickLennonToggle()
+    local Root = FindLennonRoot()
+    if not Root then return false end
+
+    local Ok, Desc = pcall(function() return Root:GetDescendants() end)
+    if not Ok or not Desc then return false end
+
+    for _, Obj in ipairs(Desc) do
+        if Obj:IsA("TextButton") or Obj:IsA("ImageButton") then
+            local Corner = Obj:FindFirstChildOfClass("UICorner")
+            if Corner then
+                local Cr = Corner.CornerRadius
+                if Cr.X.Scale >= 0.5 and Cr.Y.Scale >= 0.5 then
+                    if FireClick(Obj) then return true end
+                end
+            end
+        end
+    end
+
+    for _, Obj in ipairs(Desc) do
+        if Obj:IsA("Frame") then
+            local Corner = Obj:FindFirstChildOfClass("UICorner")
+            if Corner then
+                local Cr = Corner.CornerRadius
+                if Cr.X.Scale >= 0.5 and Cr.Y.Scale >= 0.5 then
+                    local Size = Obj.AbsoluteSize
+                    if Size.X >= 15 and Size.X <= 45 and Size.Y >= 15 and Size.Y <= 45 then
+                        local Parent = Obj.Parent
+                        while Parent and Parent ~= Root do
+                            if Parent:IsA("TextButton") or Parent:IsA("ImageButton") then
+                                if FireClick(Parent) then return true end
+                                break
+                            end
+                            Parent = Parent.Parent
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function StartLennonAutoClick()
+    task.spawn(function()
+        local FailCount = 0
+        while true do
+            local Now = os.time()
+            local Sec = Now % 5
+            local Align = (5 - Sec) % 5
+            if Align == 0 then Align = 5 end
+            task.wait(Align)
+            task.wait(3)
+            local Ok = TryClickLennonToggle()
+            if Ok then
+                FailCount = 0
+            else
+                FailCount = FailCount + 1
+                if FailCount == 5 then
+                    Notify("Lennon Hub", "Toggle Not Found", 4)
+                end
+            end
+        end
+    end)
+end
+
+pcall(function()
+    local Parents = {CoreGui}
+    local Pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if Pg then table.insert(Parents, Pg) end
+    if gethui then
+        local Ok, Hui = pcall(gethui)
+        if Ok and Hui then table.insert(Parents, Hui) end
+    end
+    for _, P in ipairs(Parents) do
+        if P then
+            local Old = P:FindFirstChild(GUI_NAME)
+            if Old then pcall(function() Old:Destroy() end) end
         end
     end
 end)
@@ -335,8 +438,8 @@ Gui.ResetOnSpawn = false
 Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function()
     if gethui then
-        local ok, hui = pcall(gethui)
-        if ok and hui then Gui.Parent = hui end
+        local Ok, Hui = pcall(gethui)
+        if Ok and Hui then Gui.Parent = Hui end
     end
     if not Gui.Parent and syn and syn.protect_gui then
         syn.protect_gui(Gui)
@@ -346,353 +449,585 @@ pcall(function()
 end)
 if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
-local panel = Instance.new("Frame")
-panel.Name = "Panel"
-panel.Size = UDim2.new(0, 230, 0, 274)
-panel.Position = readPos() or UDim2.new(0.5, -115, 0.72, 0)
-panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-panel.BorderSizePixel = 0
-panel.Parent = Gui
+local Panel = Instance.new("Frame")
+Panel.Name = "Panel"
+Panel.Size = UDim2.new(0, 230, 0, 314)
+Panel.Position = ReadPos() or UDim2.new(0.5, -115, 0.62, 0)
+Panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+Panel.BorderSizePixel = 0
+Panel.Parent = Gui
 
-local panelCorner = Instance.new("UICorner")
-panelCorner.CornerRadius = UDim.new(0, 16)
-panelCorner.Parent = panel
+local PanelCorner = Instance.new("UICorner")
+PanelCorner.CornerRadius = UDim.new(0, 16)
+PanelCorner.Parent = Panel
 
-local panelGradient = Instance.new("UIGradient")
-panelGradient.Color = ColorSequence.new{
+local PanelGradient = Instance.new("UIGradient")
+PanelGradient.Color = ColorSequence.new{
     ColorSequenceKeypoint.new(0, Color3.fromRGB(34, 34, 48)),
     ColorSequenceKeypoint.new(1, Color3.fromRGB(14, 14, 20))
 }
-panelGradient.Rotation = 135
-panelGradient.Parent = panel
+PanelGradient.Rotation = 135
+PanelGradient.Parent = Panel
 
-local panelStroke = Instance.new("UIStroke")
-panelStroke.Color = Color3.fromRGB(85, 85, 120)
-panelStroke.Thickness = 1.2
-panelStroke.Transparency = 0.4
-panelStroke.Parent = panel
+local PanelStroke = Instance.new("UIStroke")
+PanelStroke.Color = Color3.fromRGB(85, 85, 120)
+PanelStroke.Thickness = 1.2
+PanelStroke.Transparency = 0.4
+PanelStroke.Parent = Panel
 
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, -40, 0, 24)
-titleLabel.Position = UDim2.new(0, 16, 0, 6)
-titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "SAE Hub"
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextSize = 14
-titleLabel.TextColor3 = Color3.fromRGB(232, 232, 248)
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-titleLabel.Parent = panel
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -40, 0, 24)
+TitleLabel.Position = UDim2.new(0, 16, 0, 6)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "SAE Hub"
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 14
+TitleLabel.TextColor3 = Color3.fromRGB(232, 232, 248)
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = Panel
 
-local statusDot = Instance.new("Frame")
-statusDot.Size = UDim2.new(0, 8, 0, 8)
-statusDot.Position = UDim2.new(1, -22, 0, 14)
-statusDot.BackgroundColor3 = Color3.fromRGB(90, 220, 140)
-statusDot.BorderSizePixel = 0
-statusDot.Parent = panel
+local StatusDot = Instance.new("Frame")
+StatusDot.Size = UDim2.new(0, 8, 0, 8)
+StatusDot.Position = UDim2.new(1, -22, 0, 14)
+StatusDot.BackgroundColor3 = Color3.fromRGB(90, 220, 140)
+StatusDot.BorderSizePixel = 0
+StatusDot.Parent = Panel
 
-local dotCorner = Instance.new("UICorner")
-dotCorner.CornerRadius = UDim.new(1, 0)
-dotCorner.Parent = statusDot
+local DotCorner = Instance.new("UICorner")
+DotCorner.CornerRadius = UDim.new(1, 0)
+DotCorner.Parent = StatusDot
 
-local dragArea = Instance.new("TextButton")
-dragArea.Size = UDim2.new(1, 0, 0, 30)
-dragArea.Position = UDim2.new(0, 0, 0, 0)
-dragArea.BackgroundTransparency = 1
-dragArea.Text = ""
-dragArea.AutoButtonColor = false
-dragArea.Parent = panel
+local DragArea = Instance.new("TextButton")
+DragArea.Size = UDim2.new(1, 0, 0, 30)
+DragArea.Position = UDim2.new(0, 0, 0, 0)
+DragArea.BackgroundTransparency = 1
+DragArea.Text = ""
+DragArea.AutoButtonColor = false
+DragArea.Parent = Panel
 
--- === STATS FRAME ===
-local statsFrame = Instance.new("Frame")
-statsFrame.Size = UDim2.new(1, -20, 0, 112)
-statsFrame.Position = UDim2.new(0, 10, 0, 32)
-statsFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-statsFrame.BorderSizePixel = 0
-statsFrame.Parent = panel
+local StatsFrame = Instance.new("Frame")
+StatsFrame.Size = UDim2.new(1, -20, 0, 112)
+StatsFrame.Position = UDim2.new(0, 10, 0, 32)
+StatsFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+StatsFrame.BorderSizePixel = 0
+StatsFrame.ClipsDescendants = true
+StatsFrame.Parent = Panel
 
-local statsCorner = Instance.new("UICorner")
-statsCorner.CornerRadius = UDim.new(0, 9)
-statsCorner.Parent = statsFrame
+local StatsCorner = Instance.new("UICorner")
+StatsCorner.CornerRadius = UDim.new(0, 9)
+StatsCorner.Parent = StatsFrame
 
-local statsStroke = Instance.new("UIStroke")
-statsStroke.Color = Color3.fromRGB(60, 60, 85)
-statsStroke.Thickness = 1
-statsStroke.Transparency = 0.5
-statsStroke.Parent = statsFrame
+local StatsStroke = Instance.new("UIStroke")
+StatsStroke.Color = Color3.fromRGB(60, 60, 85)
+StatsStroke.Thickness = 1
+StatsStroke.Transparency = 0.5
+StatsStroke.Parent = StatsFrame
 
-local statsLayout = Instance.new("UIListLayout")
-statsLayout.Padding = UDim.new(0, 4)
-statsLayout.SortOrder = Enum.SortOrder.LayoutOrder
-statsLayout.Parent = statsFrame
+local StatsLayout = Instance.new("UIListLayout")
+StatsLayout.Padding = UDim.new(0, 4)
+StatsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+StatsLayout.Parent = StatsFrame
 
-local statsPadding = Instance.new("UIPadding")
-statsPadding.PaddingTop = UDim.new(0, 8)
-statsPadding.PaddingLeft = UDim.new(0, 10)
-statsPadding.PaddingRight = UDim.new(0, 10)
-statsPadding.PaddingBottom = UDim.new(0, 8)
-statsPadding.Parent = statsFrame
+local StatsPadding = Instance.new("UIPadding")
+StatsPadding.PaddingTop = UDim.new(0, 8)
+StatsPadding.PaddingLeft = UDim.new(0, 10)
+StatsPadding.PaddingRight = UDim.new(0, 10)
+StatsPadding.PaddingBottom = UDim.new(0, 8)
+StatsPadding.Parent = StatsFrame
 
-local function makeStatLabel(prefix, order)
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 0, 20)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = prefix .. ": --"
-    lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 12
-    lbl.TextColor3 = Color3.fromRGB(210, 210, 230)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.LayoutOrder = order
-    lbl.Parent = statsFrame
-    return lbl
+local function MakeStatLabel(Prefix, Order)
+    local Lbl = Instance.new("TextLabel")
+    Lbl.Size = UDim2.new(1, 0, 0, 20)
+    Lbl.BackgroundTransparency = 1
+    Lbl.Text = Prefix .. ": --"
+    Lbl.Font = Enum.Font.GothamMedium
+    Lbl.TextSize = 12
+    Lbl.TextColor3 = Color3.fromRGB(210, 210, 230)
+    Lbl.TextXAlignment = Enum.TextXAlignment.Left
+    Lbl.LayoutOrder = Order
+    Lbl.Parent = StatsFrame
+    return Lbl
 end
 
-local hopLbl    = makeStatLabel("Hops", 1)
-local autoLbl   = makeStatLabel("Execs (auto)", 2)
-local manualLbl = makeStatLabel("Execs (manual)", 3)
-local timeLbl   = makeStatLabel("Tempo no srv", 4)
+local HopLbl    = MakeStatLabel("Hops", 1)
+local AutoLbl   = MakeStatLabel("Execs (Auto)", 2)
+local ManualLbl = MakeStatLabel("Execs (Manual)", 3)
+local TimeLbl   = MakeStatLabel("Time on Server", 4)
 
-local refreshStats -- forward declaration
+local PersistOn = false
 
-local persistOn = false
+local function MakeBtn(Text, YPos, IsToggle)
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(1, -20, 0, 34)
+    Btn.Position = UDim2.new(0, 10, 0, YPos)
+    Btn.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+    Btn.Text = Text
+    Btn.TextColor3 = Color3.fromRGB(225, 225, 240)
+    Btn.Font = Enum.Font.GothamMedium
+    Btn.TextSize = 13
+    Btn.BorderSizePixel = 0
+    Btn.AutoButtonColor = false
+    Btn.Parent = Panel
 
-local function makeBtn(text, yPos, isToggle)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -20, 0, 34)
-    btn.Position = UDim2.new(0, 10, 0, yPos)
-    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(225, 225, 240)
-    btn.Font = Enum.Font.GothamMedium
-    btn.TextSize = 13
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = panel
+    local C = Instance.new("UICorner")
+    C.CornerRadius = UDim.new(0, 9)
+    C.Parent = Btn
 
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 9)
-    c.Parent = btn
+    local S = Instance.new("UIStroke")
+    S.Color = Color3.fromRGB(70, 70, 95)
+    S.Thickness = 1
+    S.Transparency = 0.4
+    S.Parent = Btn
 
-    local s = Instance.new("UIStroke")
-    s.Color = Color3.fromRGB(70, 70, 95)
-    s.Thickness = 1
-    s.Transparency = 0.4
-    s.Parent = btn
-
-    btn.MouseEnter:Connect(function()
-        if isToggle and persistOn then return end
-        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(44, 44, 62)}):Play()
-        TweenService:Create(s, TweenInfo.new(0.15), {Color = Color3.fromRGB(120, 130, 230), Transparency = 0}):Play()
+    Btn.MouseEnter:Connect(function()
+        if IsToggle and PersistOn then return end
+        TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(44, 44, 62)}):Play()
+        TweenService:Create(S, TweenInfo.new(0.15), {Color = Color3.fromRGB(120, 130, 230), Transparency = 0}):Play()
     end)
-    btn.MouseLeave:Connect(function()
-        if isToggle and persistOn then
-            TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
-            TweenService:Create(s, TweenInfo.new(0.15), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
+    Btn.MouseLeave:Connect(function()
+        if IsToggle and PersistOn then
+            TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
+            TweenService:Create(S, TweenInfo.new(0.15), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
             return
         end
-        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
-        TweenService:Create(s, TweenInfo.new(0.15), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
+        TweenService:Create(Btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
+        TweenService:Create(S, TweenInfo.new(0.15), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
     end)
 
-    return btn, s
+    return Btn, S
 end
 
-local hopBtn = makeBtn("Server Hop", 152, false)
-local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 192, true)
-local refreshBtn = makeBtn("Refresh Stats", 232, false)
+local HopBtn = MakeBtn("Server Hop", 152, false)
+local PersistBtn, PersistStroke = MakeBtn("Auto-Exec  Off", 192, true)
+local RefreshBtn = MakeBtn("Refresh Stats", 232, false)
+local VersionBtn = MakeBtn("Change Version", 272, false)
 
-refreshStats = function()
-    local s = readStats()
-    hopLbl.Text = "Hops: " .. s.hops
-    autoLbl.Text = "Execs (auto): " .. s.execAuto
-    manualLbl.Text = "Execs (manual): " .. s.execManual
-    local mins = math.floor((os.time() - SESSION_START) / 60)
-    local secs = (os.time() - SESSION_START) % 60
-    if mins < 1 then
-        timeLbl.Text = "Tempo no srv: " .. secs .. "s"
-    else
-        timeLbl.Text = "Tempo no srv: " .. mins .. " min"
-    end
+local RefreshStats
+
+local function ResetStats()
+    WriteStats(DefaultStats())
+    SESSION_START = os.time()
+    pcall(RefreshStats)
+    Notify("Stats", "All Stats Reset", 3)
 end
 
-refreshStats()
+RefreshStats = function()
+    local S = ReadStats()
+    HopLbl.Text = "Hops: " .. S.hops
+    AutoLbl.Text = "Execs (Auto): " .. S.execAuto
+    ManualLbl.Text = "Execs (Manual): " .. S.execManual
+    local Total = os.time() - SESSION_START
+    TimeLbl.Text = "Time on Server: " .. Total .. "s"
+end
 
--- auto-update do tempo a cada 10s
+RefreshStats()
+
 task.spawn(function()
     while true do
-        task.wait(10)
-        pcall(refreshStats)
+        task.wait(1)
+        pcall(RefreshStats)
     end
 end)
 
-local dragging = false
-local dragStart, startPos
-dragArea.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = panel.Position
+local Dragging = false
+local DragStart, StartPos
+DragArea.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        Dragging = true
+        DragStart = Input.Position
+        StartPos = Panel.Position
     end
 end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+UserInputService.InputChanged:Connect(function(Input)
+    if Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+        local Delta = Input.Position - DragStart
+        Panel.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + Delta.X, StartPos.Y.Scale, StartPos.Y.Offset + Delta.Y)
     end
 end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        if dragging then
-            dragging = false
-            writePos(panel.Position)
+UserInputService.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        if Dragging then
+            Dragging = false
+            WritePos(Panel.Position)
         end
     end
 end)
 
-local function waitTeleportCooldown()
-    local last = readLastTeleport()
-    local elapsed = os.time() - last
-    if elapsed < TELEPORT_COOLDOWN then
-        local remaining = TELEPORT_COOLDOWN - elapsed
-        for i = remaining, 1, -1 do
-            hopBtn.Text = "Aguardando " .. i .. "s..."
+local function WaitTeleportCooldown()
+    local Last = ReadLastTeleport()
+    local Elapsed = os.time() - Last
+    if Elapsed < TELEPORT_COOLDOWN then
+        local Remaining = TELEPORT_COOLDOWN - Elapsed
+        for I = Remaining, 1, -1 do
+            HopBtn.Text = "Waiting " .. I .. "s..."
             task.wait(1)
         end
     end
 end
 
-local hopBusy = false
+local HopBusy = false
 
-hopBtn.MouseButton1Click:Connect(function()
-    if hopBusy then return end
-    hopBusy = true
+HopBtn.MouseButton1Click:Connect(function()
+    if HopBusy then return end
+    HopBusy = true
     task.spawn(function()
-        hopBtn.Text = "Procurando..."
+        HopBtn.Text = "Searching..."
 
-        while hopBusy do
-            waitTeleportCooldown()
+        while HopBusy do
+            WaitTeleportCooldown()
 
-            local okFind, server = pcall(findBestServer)
-            if not okFind then server = nil end
+            local OkFind, Server = pcall(FindBestServer)
+            if not OkFind then Server = nil end
 
-            if not server then
+            if not Server then
                 task.wait(0.5)
-                local okFind2, server2 = pcall(findBestServer)
-                if okFind2 then server = server2 end
+                local OkFind2, Server2 = pcall(FindBestServer)
+                if OkFind2 then Server = Server2 end
             end
 
-            if server then
-                markVisited(server.id)
-                hopBtn.Text = "Entrando..."
+            if Server then
+                MarkVisited(Server.id)
+                HopBtn.Text = "Joining..."
 
-                local ok = pcall(function()
-                    TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, LocalPlayer)
+                local Ok = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, Server.id, LocalPlayer)
                 end)
 
-                if not ok then
-                    hopBtn.Text = "Falhou, retry..."
+                if not Ok then
+                    HopBtn.Text = "Failed, Retry..."
                     task.wait(HOP_RETRY_DELAY)
                 else
-                    writeLastTeleport(os.time())
-                    -- incrementa hops
-                    local s = readStats()
-                    s.hops = s.hops + 1
-                    writeStats(s)
-                    pcall(refreshStats)
+                    WriteLastTeleport(os.time())
+                    local S = ReadStats()
+                    S.hops = S.hops + 1
+                    WriteStats(S)
+                    pcall(RefreshStats)
                     task.wait(HOP_RETRY_DELAY)
                 end
             else
-                hopBtn.Text = "Sem srv, retry..."
+                HopBtn.Text = "No Server, Retry..."
                 task.wait(HOP_RETRY_DELAY)
             end
         end
 
-        hopBtn.Text = "Server Hop"
+        HopBtn.Text = "Server Hop"
     end)
 end)
 
-local queueFunc = queue_on_teleport
-    or (syn and syn.queue_on_teleport)
-    or (fluxus and fluxus.queue_on_teleport)
-    or queueonteleport
-
-local function buildLoader()
-    -- escreve marker ANTES de carregar o script principal,
-    -- pra próxima execução saber que veio do auto-exec
+local function BuildLoader()
     return
         'if writefile then pcall(writefile, "sae_was_auto.json", "1") end ' ..
+        'if game.PlaceId ~= ' .. ALLOWED_PLACE_ID .. ' then return end ' ..
         'if isfile and isfile("sae_autoexec.json") then ' ..
         'local ok, c = pcall(readfile, "sae_autoexec.json") ' ..
         'if ok and c then ' ..
         'local H = game:GetService("HttpService") ' ..
         'local ok2, d = pcall(H.JSONDecode, H, c) ' ..
         'if ok2 and type(d) == "table" and d.on == true then ' ..
-        'pcall(function() loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))() end) ' ..
+        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. LENNON_URL .. '"))() end) end) ' ..
+        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. ONHUB_URL .. '", true))() end) end) ' ..
+        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. ANTISAE_URL .. '"))() end) end) ' ..
+        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))() end) end) ' ..
         'end end end'
 end
 
-local function applyAutoExecVisual(on)
-    if on then
-        persistBtn.Text = "Auto-Exec  ON"
-        TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
-        TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
+local function ApplyAutoExecVisual(On)
+    if On then
+        PersistBtn.Text = "Auto-Exec  On"
+        TweenService:Create(PersistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
+        TweenService:Create(PersistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(80, 220, 140), Transparency = 0.3}):Play()
     else
-        persistBtn.Text = "Auto-Exec  OFF"
-        TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
-        TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
+        PersistBtn.Text = "Auto-Exec  Off"
+        TweenService:Create(PersistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
+        TweenService:Create(PersistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
     end
 end
 
-local function armLoader()
+local function ArmLoader()
     if not queueFunc then return false end
-    return pcall(function() queueFunc(buildLoader()) end)
+    return pcall(function() queueFunc(BuildLoader()) end)
 end
 
-local function enableAutoExec()
-    if SCRIPT_URL == "" or not queueFunc then return false end
-    writeAutoExec(true)
-    if not armLoader() then
-        writeAutoExec(false)
+local function EnableAutoExec()
+    if not queueFunc then return false end
+    if game.PlaceId ~= ALLOWED_PLACE_ID then
+        Notify("Auto-Exec", "Only Works in This Game", 4)
         return false
     end
-    persistOn = true
+    WriteAutoExec(true)
+    if not ArmLoader() then
+        WriteAutoExec(false)
+        return false
+    end
+    PersistOn = true
     return true
 end
 
-local function disableAutoExec()
-    persistOn = false
-    writeAutoExec(false)
-    armLoader()
+local function DisableAutoExec()
+    PersistOn = false
+    WriteAutoExec(false)
+    ArmLoader()
 end
 
-persistBtn.MouseButton1Click:Connect(function()
-    if not persistOn then
-        if enableAutoExec() then
-            applyAutoExecVisual(true)
+PersistBtn.MouseButton1Click:Connect(function()
+    if not PersistOn then
+        if EnableAutoExec() then
+            ApplyAutoExecVisual(true)
+            Notify("Auto-Exec", "Enabled for This Game", 3)
         else
-            persistBtn.Text = "Sem suporte"
+            PersistBtn.Text = "Not Supported"
             task.wait(2)
-            persistBtn.Text = "Auto-Exec  OFF"
+            PersistBtn.Text = "Auto-Exec  Off"
         end
     else
-        disableAutoExec()
-        applyAutoExecVisual(false)
+        DisableAutoExec()
+        ApplyAutoExecVisual(false)
+        Notify("Auto-Exec", "Disabled", 3)
     end
 end)
 
-refreshBtn.MouseButton1Click:Connect(function()
-    pcall(refreshStats)
-    refreshBtn.Text = "Atualizado!"
-    task.wait(1)
-    refreshBtn.Text = "Refresh Stats"
+local ModalOverlay = Instance.new("Frame")
+ModalOverlay.Size = UDim2.new(1, 0, 1, 0)
+ModalOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+ModalOverlay.BackgroundTransparency = 0.5
+ModalOverlay.BorderSizePixel = 0
+ModalOverlay.Visible = false
+ModalOverlay.ZIndex = 50
+ModalOverlay.Parent = Gui
+
+local Modal = Instance.new("Frame")
+Modal.Size = UDim2.new(0, 280, 0, 170)
+Modal.Position = UDim2.new(0.5, -140, 0.5, -85)
+Modal.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+Modal.BorderSizePixel = 0
+Modal.ZIndex = 51
+Modal.Parent = ModalOverlay
+
+local ModalCorner = Instance.new("UICorner")
+ModalCorner.CornerRadius = UDim.new(0, 14)
+ModalCorner.Parent = Modal
+
+local ModalStroke = Instance.new("UIStroke")
+ModalStroke.Color = Color3.fromRGB(100, 100, 140)
+ModalStroke.Thickness = 1.2
+ModalStroke.Transparency = 0.3
+ModalStroke.Parent = Modal
+
+local ModalGradient = Instance.new("UIGradient")
+ModalGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(38, 38, 54)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 18, 26))
+}
+ModalGradient.Rotation = 135
+ModalGradient.Parent = Modal
+
+local ModalTitle = Instance.new("TextLabel")
+ModalTitle.Size = UDim2.new(1, -20, 0, 26)
+ModalTitle.Position = UDim2.new(0, 10, 0, 12)
+ModalTitle.BackgroundTransparency = 1
+ModalTitle.Text = "Choose Your Version"
+ModalTitle.Font = Enum.Font.GothamBold
+ModalTitle.TextSize = 15
+ModalTitle.TextColor3 = Color3.fromRGB(240, 240, 252)
+ModalTitle.ZIndex = 52
+ModalTitle.Parent = Modal
+
+local ModalDesc = Instance.new("TextLabel")
+ModalDesc.Size = UDim2.new(1, -20, 0, 20)
+ModalDesc.Position = UDim2.new(0, 10, 0, 38)
+ModalDesc.BackgroundTransparency = 1
+ModalDesc.Text = "Lennon Hub or ON Hub?"
+ModalDesc.Font = Enum.Font.Gotham
+ModalDesc.TextSize = 12
+ModalDesc.TextColor3 = Color3.fromRGB(200, 200, 220)
+ModalDesc.ZIndex = 52
+ModalDesc.Parent = Modal
+
+local ModalRow = Instance.new("Frame")
+ModalRow.Size = UDim2.new(1, -20, 0, 38)
+ModalRow.Position = UDim2.new(0, 10, 0, 70)
+ModalRow.BackgroundTransparency = 1
+ModalRow.ZIndex = 52
+ModalRow.Parent = Modal
+
+local ModalRowLayout = Instance.new("UIListLayout")
+ModalRowLayout.FillDirection = Enum.FillDirection.Horizontal
+ModalRowLayout.Padding = UDim.new(0, 8)
+ModalRowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ModalRowLayout.Parent = ModalRow
+
+local function MakeModalBtn(Text, Color, Order)
+    local B = Instance.new("TextButton")
+    B.Size = UDim2.new(0.5, -4, 1, 0)
+    B.BackgroundColor3 = Color
+    B.Text = Text
+    B.TextColor3 = Color3.fromRGB(240, 240, 250)
+    B.Font = Enum.Font.GothamMedium
+    B.TextSize = 12
+    B.BorderSizePixel = 0
+    B.AutoButtonColor = false
+    B.LayoutOrder = Order
+    B.ZIndex = 53
+    B.Parent = ModalRow
+    local C = Instance.new("UICorner")
+    C.CornerRadius = UDim.new(0, 8)
+    C.Parent = B
+    local S = Instance.new("UIStroke")
+    S.Color = Color3.fromRGB(90, 90, 120)
+    S.Thickness = 1
+    S.Transparency = 0.5
+    S.Parent = B
+    B.MouseEnter:Connect(function()
+        TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Color:Lerp(Color3.fromRGB(255,255,255), 0.15)}):Play()
+    end)
+    B.MouseLeave:Connect(function()
+        TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Color}):Play()
+    end)
+    return B
+end
+
+local ModalBtnLennon = MakeModalBtn("Lennon Hub", Color3.fromRGB(60, 60, 120), 1)
+local ModalBtnOn = MakeModalBtn("ON Hub", Color3.fromRGB(60, 100, 80), 2)
+
+local ConfirmRow = Instance.new("Frame")
+ConfirmRow.Size = UDim2.new(1, -20, 0, 38)
+ConfirmRow.Position = UDim2.new(0, 10, 0, 70)
+ConfirmRow.BackgroundTransparency = 1
+ConfirmRow.ZIndex = 52
+ConfirmRow.Visible = false
+ConfirmRow.Parent = Modal
+
+local ConfirmRowLayout = Instance.new("UIListLayout")
+ConfirmRowLayout.FillDirection = Enum.FillDirection.Horizontal
+ConfirmRowLayout.Padding = UDim.new(0, 8)
+ConfirmRowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ConfirmRowLayout.Parent = ConfirmRow
+
+local function MakeConfirmBtn(Text, Color, Order)
+    local B = Instance.new("TextButton")
+    B.Size = UDim2.new(0.5, -4, 1, 0)
+    B.BackgroundColor3 = Color
+    B.Text = Text
+    B.TextColor3 = Color3.fromRGB(240, 240, 250)
+    B.Font = Enum.Font.GothamMedium
+    B.TextSize = 12
+    B.BorderSizePixel = 0
+    B.AutoButtonColor = false
+    B.LayoutOrder = Order
+    B.ZIndex = 53
+    B.Parent = ConfirmRow
+    local C = Instance.new("UICorner")
+    C.CornerRadius = UDim.new(0, 8)
+    C.Parent = B
+    local S = Instance.new("UIStroke")
+    S.Color = Color3.fromRGB(90, 90, 120)
+    S.Thickness = 1
+    S.Transparency = 0.5
+    S.Parent = B
+    B.MouseEnter:Connect(function()
+        TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Color:Lerp(Color3.fromRGB(255,255,255), 0.15)}):Play()
+    end)
+    B.MouseLeave:Connect(function()
+        TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Color}):Play()
+    end)
+    return B
+end
+
+local ConfirmYes = MakeConfirmBtn("Confirm", Color3.fromRGB(170, 55, 55), 1)
+local ConfirmNo = MakeConfirmBtn("Cancel", Color3.fromRGB(50, 50, 70), 2)
+
+local PendingVersion = nil
+local LennonAutoRunning = false
+
+local function ApplyVersion(V)
+    WriteVersion(V)
+    if V == "lennon" then
+        if not LennonAutoRunning then
+            LennonAutoRunning = true
+            StartLennonAutoClick()
+        end
+    end
+    Notify("Version", "Now Using: " .. (V == "lennon" and "Lennon Hub" or "ON Hub"), 4)
+end
+
+local function ShowPicker()
+    ModalOverlay.Visible = true
+    ModalRow.Visible = true
+    ConfirmRow.Visible = false
+    ModalTitle.Text = "Choose Your Version"
+    ModalDesc.Text = "Lennon Hub or ON Hub?"
+end
+
+local function ShowConfirm(V)
+    PendingVersion = V
+    ModalRow.Visible = false
+    ConfirmRow.Visible = true
+    ModalTitle.Text = "Are You Sure?"
+    ModalDesc.Text = "Use " .. (V == "lennon" and "Lennon Hub" or "ON Hub") .. "?"
+end
+
+local function HideModal()
+    ModalOverlay.Visible = false
+end
+
+ModalBtnLennon.MouseButton1Click:Connect(function() ShowConfirm("lennon") end)
+ModalBtnOn.MouseButton1Click:Connect(function() ShowConfirm("on") end)
+
+ConfirmYes.MouseButton1Click:Connect(function()
+    if PendingVersion then
+        ApplyVersion(PendingVersion)
+        PendingVersion = nil
+    end
+    HideModal()
 end)
 
-if readAutoExec() then
-    if enableAutoExec() then
-        applyAutoExecVisual(true)
+ConfirmNo.MouseButton1Click:Connect(function()
+    PendingVersion = nil
+    ShowPicker()
+end)
+
+VersionBtn.MouseButton1Click:Connect(function()
+    ShowPicker()
+end)
+
+RefreshBtn.MouseButton1Click:Connect(function()
+    ResetStats()
+end)
+
+local function ShowResetConfirm()
+    ModalOverlay.Visible = true
+    ModalRow.Visible = false
+    ConfirmRow.Visible = true
+    ModalTitle.Text = "Are You Sure?"
+    ModalDesc.Text = "This Will Reset All Stats"
+    ConfirmYes.MouseButton1Click:Connect(function()
+        ResetStats()
+        HideModal()
+    end)
+end
+
+if ReadAutoExec() then
+    if EnableAutoExec() then
+        ApplyAutoExecVisual(true)
     end
 end
 
 task.spawn(function()
     task.wait(2)
-    markVisited(game.JobId)
+    MarkVisited(game.JobId)
+end)
+
+local SavedVersion = ReadVersion()
+if SavedVersion then
+    ApplyVersion(SavedVersion)
+else
+    Panel.Visible = false
+    ShowPicker()
+    local Hook
+    Hook = ModalBtnLennon.MouseButton1Click:Connect(function() end)
+end
+
+task.spawn(function()
+    while not ReadVersion() do task.wait(0.2) end
+    Panel.Visible = true
 end)
