@@ -2,15 +2,254 @@ local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 
+local PLACE_ID = game.PlaceId
+local COOLDOWN_TIME = 600
+local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
+local TELEPORT_FILE = "sae_last_teleport.json"
+local POS_FILE = "sae_pos.json"
+local TELEPORT_COOLDOWN = 1
+local MAX_PAGES = 12
+local FRIEND_CACHE_TIME = 300
+local HOP_RETRY_DELAY = 4
+
+local GENV = (getgenv and getgenv()) or _G
+local INSTANCE_ID = (GENV.SAE_INSTANCE_ID or 0) + 1
+GENV.SAE_INSTANCE_ID = INSTANCE_ID
+
+if GENV.SAE_GUI and typeof(GENV.SAE_GUI) == "Instance" and GENV.SAE_GUI.Parent then
+    pcall(function() GENV.SAE_GUI:Destroy() end)
+end
+
+local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
+
+local function httpGet(url)
+    if REQUEST then
+        local ok, res = pcall(REQUEST, {Url = url, Method = "GET"})
+        if ok and type(res) == "table" and res.Body and res.Body ~= "" then
+            return res.Body
+        end
+    end
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and res and res ~= "" then return res end
+    return nil
+end
+
+local function httpGetRetry(url, tries)
+    tries = tries or 3
+    for i = 1, tries do
+        local res = httpGet(url)
+        if res and res ~= "" then return res end
+        if i < tries then task.wait(0.3) end
+    end
+    return nil
+end
+
+local function readVisited()
+    local data = {}
+    if isfile and isfile(STORAGE_FILE) then
+        local ok, content = pcall(readfile, STORAGE_FILE)
+        if ok and content then
+            local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+            if ok2 and type(parsed) == "table" then data = parsed end
+        end
+    end
+    local now = os.time()
+    for k, v in pairs(data) do
+        if type(v) ~= "number" or (now - v) >= COOLDOWN_TIME then data[k] = nil end
+    end
+    return data
+end
+
+local function writeVisited(data)
+    if writefile then pcall(writefile, STORAGE_FILE, HttpService:JSONEncode(data)) end
+end
+
+local visited = readVisited()
+visited[game.JobId] = os.time()
+writeVisited(visited)
+
+local function isBlocked(jobId)
+    local t = visited[jobId]
+    if not t then return false end
+    if (os.time() - t) >= COOLDOWN_TIME then
+        visited[jobId] = nil
+        writeVisited(visited)
+        return false
+    end
+    return true
+end
+
+local function markVisited(jobId)
+    if jobId and jobId ~= "" then
+        visited[jobId] = os.time()
+        writeVisited(visited)
+    end
+end
+
+local function readAutoExec()
+    if not isfile or not isfile(AUTOEXEC_FILE) then return false end
+    local ok, content = pcall(readfile, AUTOEXEC_FILE)
+    if not ok or not content then return false end
+    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok2 and type(parsed) == "table" then return parsed.on == true end
+    return false
+end
+
+local function writeAutoExec(on)
+    if writefile then pcall(writefile, AUTOEXEC_FILE, HttpService:JSONEncode({on = on})) end
+end
+
+local function readLastTeleport()
+    if not isfile or not isfile(TELEPORT_FILE) then return 0 end
+    local ok, content = pcall(readfile, TELEPORT_FILE)
+    if not ok or not content then return 0 end
+    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok2 and type(parsed) == "table" and type(parsed.t) == "number" then
+        return parsed.t
+    end
+    return 0
+end
+
+local function writeLastTeleport(t)
+    if writefile then pcall(writefile, TELEPORT_FILE, HttpService:JSONEncode({t = t})) end
+end
+
+local function readPos()
+    if not isfile or not isfile(POS_FILE) then return nil, nil end
+    local ok, content = pcall(readfile, POS_FILE)
+    if not ok or not content then return nil, nil end
+    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok2 and type(parsed) == "table" and type(parsed.x) == "number" and type(parsed.y) == "number" then
+        return parsed.x, parsed.y
+    end
+    return nil, nil
+end
+
+local function writePos(x, y)
+    if writefile then pcall(writefile, POS_FILE, HttpService:JSONEncode({x = x, y = y})) end
+end
+
+local friendCache = {ids = nil, time = 0}
+
+local function getFriendGameIds()
+    if friendCache.ids and (os.time() - friendCache.time) < FRIEND_CACHE_TIME then
+        return friendCache.ids
+    end
+    local ids = {}
+    if REQUEST then
+        local res = httpGetRetry("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends", 2)
+        if res then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+            if ok and data and data.data then
+                local list = {}
+                for _, f in ipairs(data.data) do table.insert(list, f.id) end
+                for i = 1, #list, 100 do
+                    local batch = {}
+                    for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
+                    local body = HttpService:JSONEncode({userIds = batch})
+                    local ok2, res2 = pcall(REQUEST, {
+                        Url = "https://presence.roblox.com/v1/presence/users",
+                        Method = "POST",
+                        Body = body,
+                        Headers = {["Content-Type"] = "application/json"}
+                    })
+                    if ok2 and res2 and res2.Body then
+                        local ok3, pres = pcall(HttpService.JSONDecode, HttpService, res2.Body)
+                        if ok3 and pres and pres.userPresences then
+                            for _, p in ipairs(pres.userPresences) do
+                                if p.gameId and p.gameId ~= "" then ids[p.gameId] = true end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    friendCache.ids = ids
+    friendCache.time = os.time()
+    return ids
+end
+
+local function fetchPage(cursor, sortOrder)
+    sortOrder = sortOrder or "Asc"
+    local url = "https://games.roblox.com/v1/games/" .. PLACE_ID ..
+                "/servers/Public?sortOrder=" .. sortOrder .. "&limit=100"
+    if cursor and cursor ~= "" then
+        url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+    end
+    local res = httpGetRetry(url, 3)
+    if not res then return nil end
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, res)
+    if not ok or type(data) ~= "table" then return nil end
+    return data
+end
+
+local function collectCandidates(filterFn, friendIds, sortOrder)
+    local candidates = {}
+    local cursor = nil
+    local pages = 0
+    while pages < MAX_PAGES do
+        pages = pages + 1
+        local data = fetchPage(cursor, sortOrder)
+        if not data or not data.data then break end
+        for _, sv in ipairs(data.data) do
+            if sv.id and sv.id ~= game.JobId and sv.playing < sv.maxPlayers then
+                if filterFn(sv, friendIds) then
+                    table.insert(candidates, sv)
+                end
+            end
+        end
+        cursor = data.nextPageCursor
+        if not cursor or cursor == "" then break end
+        if #candidates >= 25 then break end
+    end
+    return candidates
+end
+
+local function pickBest(candidates)
+    table.sort(candidates, function(a, b)
+        if a.playing ~= b.playing then return a.playing < b.playing end
+        return (a.ping or 999) < (b.ping or 999)
+    end)
+    local poolSize = math.min(5, #candidates)
+    return candidates[math.random(1, poolSize)]
+end
+
+local function findBestServer()
+    local friendIds = getFriendGameIds()
+    local orders = {"Asc", "Desc"}
+
+    for _, order in ipairs(orders) do
+        local c = collectCandidates(function(sv, f)
+            return not isBlocked(sv.id) and not f[sv.id]
+        end, friendIds, order)
+        if #c > 0 then return pickBest(c) end
+    end
+
+    for _, order in ipairs(orders) do
+        local c = collectCandidates(function(sv, f)
+            return not f[sv.id]
+        end, friendIds, order)
+        if #c > 0 then return pickBest(c) end
+    end
+
+    for _, order in ipairs(orders) do
+        local c = collectCandidates(function() return true end, friendIds, order)
+        if #c > 0 then return pickBest(c) end
+    end
+
+    return nil
+end
 
 local Gui = Instance.new("ScreenGui")
-Gui.Name = "SAE_AutoExec_" .. tostring(math.random(100000, 999999))
+Gui.Name = "SAE_Hub_" .. tostring(math.random(100000, 999999))
 Gui.ResetOnSpawn = false
 Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function()
@@ -24,11 +263,17 @@ pcall(function()
     end
 end)
 if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+GENV.SAE_GUI = Gui
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
-panel.Size = UDim2.new(0, 230, 0, 78)
-panel.Position = UDim2.new(0.5, -115, 0.78, 0)
+panel.Size = UDim2.new(0, 230, 0, 128)
+local savedX, savedY = readPos()
+if savedX and savedY then
+    panel.Position = UDim2.new(0, savedX, 0, savedY)
+else
+    panel.Position = UDim2.new(0.5, -115, 0.78, 0)
+end
 panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 panel.BorderSizePixel = 0
 panel.Parent = Gui
@@ -55,7 +300,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -40, 0, 24)
 titleLabel.Position = UDim2.new(0, 16, 0, 6)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Auto-Exec"
+titleLabel.Text = "SAE Hub"
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 14
 titleLabel.TextColor3 = Color3.fromRGB(232, 232, 248)
@@ -82,19 +327,6 @@ dragArea.AutoButtonColor = false
 dragArea.Parent = panel
 
 local persistOn = false
-
-local function readAutoExec()
-    if not isfile or not isfile(AUTOEXEC_FILE) then return false end
-    local ok, content = pcall(readfile, AUTOEXEC_FILE)
-    if not ok or not content then return false end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" then return parsed.on == true end
-    return false
-end
-
-local function writeAutoExec(on)
-    if writefile then pcall(writefile, AUTOEXEC_FILE, HttpService:JSONEncode({on = on})) end
-end
 
 local function makeBtn(text, yPos, isToggle)
     local btn = Instance.new("TextButton")
@@ -137,7 +369,8 @@ local function makeBtn(text, yPos, isToggle)
     return btn, s
 end
 
-local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 38, true)
+local hopBtn = makeBtn("Server Hop", 38, false)
+local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 78, true)
 
 local dragging = false
 local dragStart, startPos
@@ -156,8 +389,71 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if dragging then
+            writePos(panel.Position.X.Offset, panel.Position.Y.Offset)
+        end
         dragging = false
     end
+end)
+
+local function waitTeleportCooldown()
+    local last = readLastTeleport()
+    local elapsed = os.time() - last
+    if elapsed < TELEPORT_COOLDOWN then
+        local remaining = TELEPORT_COOLDOWN - elapsed
+        for i = remaining, 1, -1 do
+            if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then return end
+            hopBtn.Text = "Aguardando " .. i .. "s..."
+            task.wait(1)
+        end
+    end
+end
+
+local hopBusy = false
+
+hopBtn.MouseButton1Click:Connect(function()
+    if hopBusy then return end
+    hopBusy = true
+    task.spawn(function()
+        hopBtn.Text = "Procurando..."
+
+        while hopBusy and GENV.SAE_INSTANCE_ID == INSTANCE_ID do
+            waitTeleportCooldown()
+            if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then break end
+
+            local server = findBestServer()
+            if not server then
+                task.wait(0.5)
+                server = findBestServer()
+            end
+
+            if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then break end
+
+            if server then
+                markVisited(server.id)
+                hopBtn.Text = "Entrando..."
+
+                local ok = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, LocalPlayer)
+                end)
+
+                if not ok then
+                    hopBtn.Text = "Falhou, retry..."
+                    task.wait(HOP_RETRY_DELAY)
+                else
+                    writeLastTeleport(os.time())
+                    task.wait(HOP_RETRY_DELAY)
+                end
+            else
+                hopBtn.Text = "Sem srv, retry..."
+                task.wait(HOP_RETRY_DELAY)
+            end
+        end
+
+        if GENV.SAE_INSTANCE_ID == INSTANCE_ID then
+            hopBtn.Text = "Server Hop"
+        end
+    end)
 end)
 
 local queueFunc = queue_on_teleport
@@ -231,3 +527,8 @@ if readAutoExec() then
         applyAutoExecVisual(true)
     end
 end
+
+task.spawn(function()
+    task.wait(2)
+    markVisited(game.JobId)
+end)
