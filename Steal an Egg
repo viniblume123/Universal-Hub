@@ -1,4 +1,5 @@
 local LENNON_URL = "https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/main/stealaneggv2"
+local ONHUB_URL = "https://raw.githubusercontent.com/davizin713/ONhub/refs/heads/main/script.lua"
 local ANTISAE_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/anti%20(steal%20an%20egg)"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
@@ -21,14 +22,36 @@ local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
 local HOP_RETRY_DELAY = 4
 local GUI_NAME = "SAE_Hub_UI"
-local LOOP_START_DELAY = 3
-local LOOP_INTERVAL = 60
+local ANTIAFK_INTERVAL = 120
 
 task.spawn(function()
     pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
 end)
 task.spawn(function()
+    pcall(function() loadstring(game:HttpGet(ONHUB_URL, true))() end)
+end)
+task.spawn(function()
     pcall(function() loadstring(game:HttpGet(ANTISAE_URL))() end)
+end)
+
+task.spawn(function()
+    local VirtualUser = game:GetService("VirtualUser")
+    task.wait(5)
+    while true do
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton1(Vector2.new(10, 10))
+        end)
+        task.wait(0.15)
+        pcall(function()
+            VirtualUser:ButtonDown(Enum.KeyCode.Space)
+        end)
+        task.wait(0.1)
+        pcall(function()
+            VirtualUser:ButtonUp(Enum.KeyCode.Space)
+        end)
+        task.wait(ANTIAFK_INTERVAL)
+    end
 end)
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
@@ -548,63 +571,4 @@ end
 task.spawn(function()
     task.wait(2)
     markVisited(game.JobId)
-end)
-
-task.spawn(function()
-    local function findLoopButton()
-        local roots = {}
-        pcall(function()
-            if gethui then table.insert(roots, gethui()) end
-        end)
-        table.insert(roots, CoreGui)
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        if pg then table.insert(roots, pg) end
-
-        for _, root in ipairs(roots) do
-            if root then
-                local result = nil
-                pcall(function()
-                    for _, d in ipairs(root:GetDescendants()) do
-                        if d:IsA("TextLabel") and string.upper(d.Text) == "LOOP" then
-                            local parent = d.Parent
-                            if parent then
-                                for _, sib in ipairs(parent:GetChildren()) do
-                                    if sib:IsA("TextButton") and sib ~= d then
-                                        result = sib
-                                        return
-                                    end
-                                end
-                                for _, desc in ipairs(parent:GetDescendants()) do
-                                    if desc:IsA("TextButton") and desc ~= d then
-                                        result = desc
-                                        return
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end)
-                if result then return result end
-            end
-        end
-        return nil
-    end
-
-    local function pressBtn(btn)
-        if not btn then return false end
-        if firesignal then
-            local ok = pcall(firesignal, btn.MouseButton1Click)
-            if ok then return true end
-        end
-        local ok = pcall(function() btn.MouseButton1Click:Fire() end)
-        return ok
-    end
-
-    task.wait(LOOP_START_DELAY)
-
-    while true do
-        local btn = findLoopButton()
-        if btn then pressBtn(btn) end
-        task.wait(LOOP_INTERVAL)
-    end
 end)
