@@ -2,6 +2,14 @@ local LENNON_URL = "https://raw.githubusercontent.com/lennonxscripts/lennonhubv2
 local ANTIAFK_URL = "https://rawscripts.net/raw/Universal-Script-AntiAFK-script-18076"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
+local EXTRA_SCRIPTS = {
+    "https://raw.githubusercontent.com/hm5650/ACR/refs/heads/main/Acr",
+    "https://rawscripts.net/raw/Universal-Script-Anti-Cheat-ByIp*-61750",
+    "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/anti%20ban",
+    "https://raw.githubusercontent.com/SUUUUUS00000/MEGGD-Anti-kick/refs/heads/main/MEGGD%20Best%20Anti-kick.lua",
+    "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/anti%20(steal%20an%20egg))"
+}
+
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local TeleportService = game:GetService("TeleportService")
@@ -9,6 +17,7 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 600
@@ -16,12 +25,40 @@ local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
 local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
+local WEARBEST_INTERVAL = 60
 
 task.spawn(function()
     pcall(function() loadstring(game:HttpGet(LENNON_URL))() end)
 end)
 task.spawn(function()
     pcall(function() loadstring(game:HttpGet(ANTIAFK_URL))() end)
+end)
+for _, url in ipairs(EXTRA_SCRIPTS) do
+    task.spawn(function()
+        pcall(function() loadstring(game:HttpGet(url, true))() end)
+    end)
+end
+
+task.spawn(function()
+    while true do
+        pcall(function()
+            local remote = ReplicatedStorage:WaitForChild("Packages", 30)
+            if remote then
+                remote = remote:WaitForChild("Networking", 30)
+                if remote then
+                    remote = remote:WaitForChild("RF/Haul/WearBest", 30)
+                    if remote then
+                        if remote:IsA("RemoteFunction") then
+                            remote:InvokeServer()
+                        elseif remote:IsA("RemoteEvent") then
+                            remote:FireServer()
+                        end
+                    end
+                end
+            end
+        end)
+        task.wait(WEARBEST_INTERVAL)
+    end
 end)
 
 local REQUEST = (syn and syn.request) or (http and http.request) or http_request or request
@@ -354,32 +391,69 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
-local hopBusy = false
-hopBtn.MouseButton1Click:Connect(function()
-    if hopBusy then return end
-    hopBusy = true
-    hopBtn.Text = "Procurando..."
-    task.spawn(function()
+local hopActive = false
+
+local function attemptTeleport(server)
+    local oldJobId = game.JobId
+    local failed = false
+    local conn
+    conn = TeleportService.TeleportInitFailed:Connect(function(_, result)
+        if result ~= Enum.TeleportResult.Success then
+            failed = true
+        end
+    end)
+    local ok = pcall(function()
+        TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, LocalPlayer)
+    end)
+    if not ok then failed = true end
+    local t = 0
+    while t < 8 do
+        task.wait(0.25)
+        t = t + 0.25
+        if game.JobId ~= oldJobId then
+            if conn then conn:Disconnect() end
+            return true
+        end
+        if failed then break end
+    end
+    if conn then conn:Disconnect() end
+    return false
+end
+
+local function hopLoop()
+    hopActive = true
+    local attempts = 0
+    while hopActive do
+        attempts = attempts + 1
+        hopBtn.Text = "Procurando..."
         local server = findBestServer()
         if not server then
-            task.wait(1)
-            server = findBestServer()
-        end
-        if not server then
-            hopBtn.Text = "Sem servidores"
+            hopBtn.Text = "Nenhum, retry " .. attempts
             task.wait(2)
-            hopBtn.Text = "Server Hop"
-            hopBusy = false
-            return
+        else
+            markVisited(server.id)
+            hopBtn.Text = "Entrando..."
+            local ok = attemptTeleport(server)
+            if ok then
+                hopActive = false
+                return
+            end
+            hopBtn.Text = "Falhou, retry " .. attempts
+            task.wait(1)
         end
-        markVisited(server.id)
-        hopBtn.Text = "Entrando..."
-        task.wait(0.4)
-        pcall(function()
-            TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, LocalPlayer)
-        end)
-        hopBusy = false
-    end)
+    end
+    hopBtn.Text = "Server Hop"
+end
+
+hopBtn.MouseButton1Click:Connect(function()
+    if hopActive then
+        hopActive = false
+        hopBtn.Text = "Cancelado"
+        task.wait(1)
+        hopBtn.Text = "Server Hop"
+        return
+    end
+    task.spawn(hopLoop)
 end)
 
 local queueFunc = queue_on_teleport
