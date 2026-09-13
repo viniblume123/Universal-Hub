@@ -1,4 +1,4 @@
-local SCRIPT_URL = ""
+local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 getgenv().SecureMode = true
 
