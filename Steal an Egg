@@ -16,16 +16,17 @@ local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
 local TELEPORT_FILE = "sae_last_teleport.json"
 local POS_FILE = "sae_pos.json"
+local SESSION_FILE = "sae_session.json"
 local TELEPORT_COOLDOWN = 3
-local MAX_PAGES = 100
+local MAX_PAGES = 12
 local FRIEND_CACHE_TIME = 300
-local HOP_RETRY_DELAY = 5
+local HOP_RETRY_DELAY = 2
 
 local GENV = (getgenv and getgenv()) or _G
 local INSTANCE_ID = (GENV.SAE_INSTANCE_ID or 0) + 1
 GENV.SAE_INSTANCE_ID = INSTANCE_ID
 
-if GENV.SAE_GUI and typeof(GENV.SAE_GUI) == "Instance" and GENV.SAE_GUI.Parent then
+if GENV.SAE_GUI and typeof(GENV.SAE_GUI) == "Instance" then
     pcall(function() GENV.SAE_GUI:Destroy() end)
 end
 
@@ -60,15 +61,21 @@ local function httpGetRetry(url, tries)
     return nil
 end
 
+local function readJson(file)
+    if not isfile or not isfile(file) then return nil end
+    local ok, content = pcall(readfile, file)
+    if not ok or not content then return nil end
+    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok2 and type(parsed) == "table" then return parsed end
+    return nil
+end
+
+local function writeJson(file, data)
+    if writefile then pcall(writefile, file, HttpService:JSONEncode(data)) end
+end
+
 local function readVisited()
-    local data = {}
-    if isfile and isfile(STORAGE_FILE) then
-        local ok, content = pcall(readfile, STORAGE_FILE)
-        if ok and content then
-            local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-            if ok2 and type(parsed) == "table" then data = parsed end
-        end
-    end
+    local data = readJson(STORAGE_FILE) or {}
     local now = os.time()
     for k, v in pairs(data) do
         if type(v) ~= "number" or (now - v) >= COOLDOWN_TIME then data[k] = nil end
@@ -76,20 +83,16 @@ local function readVisited()
     return data
 end
 
-local function writeVisited(data)
-    if writefile then pcall(writefile, STORAGE_FILE, HttpService:JSONEncode(data)) end
-end
-
 local visited = readVisited()
 visited[game.JobId] = os.time()
-writeVisited(visited)
+writeJson(STORAGE_FILE, visited)
 
 local function isBlocked(jobId)
     local t = visited[jobId]
     if not t then return false end
     if (os.time() - t) >= COOLDOWN_TIME then
         visited[jobId] = nil
-        writeVisited(visited)
+        writeJson(STORAGE_FILE, visited)
         return false
     end
     return true
@@ -98,51 +101,60 @@ end
 local function markVisited(jobId)
     if jobId and jobId ~= "" then
         visited[jobId] = os.time()
-        writeVisited(visited)
+        writeJson(STORAGE_FILE, visited)
     end
 end
 
 local function readAutoExec()
-    if not isfile or not isfile(AUTOEXEC_FILE) then return false end
-    local ok, content = pcall(readfile, AUTOEXEC_FILE)
-    if not ok or not content then return false end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" then return parsed.on == true end
-    return false
+    local d = readJson(AUTOEXEC_FILE)
+    return d and d.on == true
 end
 
 local function writeAutoExec(on)
-    if writefile then pcall(writefile, AUTOEXEC_FILE, HttpService:JSONEncode({on = on})) end
+    writeJson(AUTOEXEC_FILE, {on = on})
 end
 
 local function readLastTeleport()
-    if not isfile or not isfile(TELEPORT_FILE) then return 0 end
-    local ok, content = pcall(readfile, TELEPORT_FILE)
-    if not ok or not content then return 0 end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" and type(parsed.t) == "number" then
-        return parsed.t
-    end
+    local d = readJson(TELEPORT_FILE)
+    if d and type(d.t) == "number" then return d.t end
     return 0
 end
 
 local function writeLastTeleport(t)
-    if writefile then pcall(writefile, TELEPORT_FILE, HttpService:JSONEncode({t = t})) end
+    writeJson(TELEPORT_FILE, {t = t})
 end
 
 local function readPos()
-    if not isfile or not isfile(POS_FILE) then return nil, nil end
-    local ok, content = pcall(readfile, POS_FILE)
-    if not ok or not content then return nil, nil end
-    local ok2, parsed = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok2 and type(parsed) == "table" and type(parsed.x) == "number" and type(parsed.y) == "number" then
-        return parsed.x, parsed.y
+    local d = readJson(POS_FILE)
+    if d and type(d.x) == "number" and type(d.y) == "number" then
+        return d.x, d.y
     end
     return nil, nil
 end
 
 local function writePos(x, y)
-    if writefile then pcall(writefile, POS_FILE, HttpService:JSONEncode({x = x, y = y})) end
+    writeJson(POS_FILE, {x = x, y = y})
+end
+
+local function readSession()
+    local d = readJson(SESSION_FILE)
+    if d and type(d.start) == "number" and type(d.count) == "number" then
+        return d
+    end
+    return nil
+end
+
+local function writeSession(data)
+    writeJson(SESSION_FILE, data)
+end
+
+local session = readSession()
+if not session then
+    session = {start = os.time(), count = 1}
+    writeSession(session)
+else
+    session.count = session.count + 1
+    writeSession(session)
 end
 
 local friendCache = {ids = nil, time = 0}
@@ -261,27 +273,49 @@ local Gui = Instance.new("ScreenGui")
 Gui.Name = "SAE_Hub_" .. tostring(math.random(100000, 999999))
 Gui.ResetOnSpawn = false
 Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.DisplayOrder = 2147483647
+Gui.IgnoreGuiInset = true
+Gui.Enabled = true
+
+local parentOk = false
+
 pcall(function()
     if gethui then
         Gui.Parent = gethui()
-    elseif syn and syn.protect_gui then
-        syn.protect_gui(Gui)
-        Gui.Parent = CoreGui
-    else
-        Gui.Parent = CoreGui
+        parentOk = Gui.Parent ~= nil
     end
 end)
-if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+if not parentOk then
+    pcall(function()
+        Gui.Parent = CoreGui
+        parentOk = Gui.Parent ~= nil
+    end)
+end
+
+if not parentOk then
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+    if pg then
+        Gui.Parent = pg
+        parentOk = Gui.Parent ~= nil
+    end
+end
+
+if not parentOk then
+    task.wait(1)
+    Gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
 GENV.SAE_GUI = Gui
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
-panel.Size = UDim2.new(0, 230, 0, 128)
+panel.Size = UDim2.new(0, 240, 0, 186)
 local savedX, savedY = readPos()
 if savedX and savedY then
     panel.Position = UDim2.new(0, savedX, 0, savedY)
 else
-    panel.Position = UDim2.new(0.5, -115, 0.78, 0)
+    panel.Position = UDim2.new(0, 20, 0, 80)
 end
 panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 panel.BorderSizePixel = 0
@@ -306,7 +340,7 @@ panelStroke.Transparency = 0.4
 panelStroke.Parent = panel
 
 local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, -40, 0, 24)
+titleLabel.Size = UDim2.new(1, -40, 0, 22)
 titleLabel.Position = UDim2.new(0, 16, 0, 6)
 titleLabel.BackgroundTransparency = 1
 titleLabel.Text = "SAE Hub"
@@ -318,7 +352,7 @@ titleLabel.Parent = panel
 
 local statusDot = Instance.new("Frame")
 statusDot.Size = UDim2.new(0, 8, 0, 8)
-statusDot.Position = UDim2.new(1, -22, 0, 14)
+statusDot.Position = UDim2.new(1, -22, 0, 13)
 statusDot.BackgroundColor3 = Color3.fromRGB(90, 220, 140)
 statusDot.BorderSizePixel = 0
 statusDot.Parent = panel
@@ -327,8 +361,42 @@ local dotCorner = Instance.new("UICorner")
 dotCorner.CornerRadius = UDim.new(1, 0)
 dotCorner.Parent = statusDot
 
+local statsFrame = Instance.new("Frame")
+statsFrame.Size = UDim2.new(1, -20, 0, 40)
+statsFrame.Position = UDim2.new(0, 10, 0, 30)
+statsFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 34)
+statsFrame.BorderSizePixel = 0
+statsFrame.Parent = panel
+
+local statsCorner = Instance.new("UICorner")
+statsCorner.CornerRadius = UDim.new(0, 9)
+statsCorner.Parent = statsFrame
+
+local statsStroke = Instance.new("UIStroke")
+statsStroke.Color = Color3.fromRGB(55, 55, 75)
+statsStroke.Thickness = 1
+statsStroke.Transparency = 0.5
+statsStroke.Parent = statsFrame
+
+local function makeStatLabel(text, order)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, -20, 0, 15)
+    l.Position = UDim2.new(0, 10, 0, 4 + (order - 1) * 15)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 11
+    l.TextColor3 = Color3.fromRGB(180, 180, 210)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Parent = statsFrame
+    return l
+end
+
+local serverTimeLabel = makeStatLabel("Tempo servidor: 00:00:00", 1)
+local serverCountLabel = makeStatLabel("Servidores: 1", 2)
+
 local dragArea = Instance.new("TextButton")
-dragArea.Size = UDim2.new(1, 0, 0, 30)
+dragArea.Size = UDim2.new(1, 0, 0, 28)
 dragArea.Position = UDim2.new(0, 0, 0, 0)
 dragArea.BackgroundTransparency = 1
 dragArea.Text = ""
@@ -339,7 +407,7 @@ local persistOn = false
 
 local function makeBtn(text, yPos, isToggle)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -20, 0, 34)
+    btn.Size = UDim2.new(1, -20, 0, 32)
     btn.Position = UDim2.new(0, 10, 0, yPos)
     btn.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
     btn.Text = text
@@ -378,8 +446,9 @@ local function makeBtn(text, yPos, isToggle)
     return btn, s
 end
 
-local hopBtn = makeBtn("Server Hop", 38, false)
-local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 78, true)
+local hopBtn = makeBtn("Server Hop", 76, false)
+local persistBtn, persistStroke = makeBtn("Auto-Exec  OFF", 112, true)
+local refreshBtn = makeBtn("Refresh Stats", 148, false)
 
 local dragging = false
 local dragStart, startPos
@@ -402,6 +471,27 @@ UserInputService.InputEnded:Connect(function(input)
             writePos(panel.Position.X.Offset, panel.Position.Y.Offset)
         end
         dragging = false
+    end
+end)
+
+local function fmtTime(sec)
+    sec = math.max(0, math.floor(sec))
+    local h = math.floor(sec / 3600)
+    local m = math.floor((sec % 3600) / 60)
+    local s = sec % 60
+    return string.format("%02d:%02d:%02d", h, m, s)
+end
+
+task.spawn(function()
+    while GENV.SAE_INSTANCE_ID == INSTANCE_ID do
+        task.wait(1)
+        if GENV.SAE_INSTANCE_ID ~= INSTANCE_ID then break end
+        local now = os.time()
+        local s = readSession()
+        if s then
+            serverTimeLabel.Text = "Tempo servidor: " .. fmtTime(now - s.start)
+            serverCountLabel.Text = "Servidores: " .. s.count
+        end
     end
 end)
 
@@ -463,6 +553,15 @@ hopBtn.MouseButton1Click:Connect(function()
             hopBtn.Text = "Server Hop"
         end
     end)
+end)
+
+refreshBtn.MouseButton1Click:Connect(function()
+    session.start = os.time()
+    session.count = 1
+    writeSession(session)
+    refreshBtn.Text = "Resetado"
+    task.wait(1.2)
+    refreshBtn.Text = "Refresh Stats"
 end)
 
 local queueFunc = queue_on_teleport
@@ -539,5 +638,6 @@ end
 
 task.spawn(function()
     task.wait(2)
-    markVisited(game.JobId)
+    visited[game.JobId] = os.time()
+    writeJson(STORAGE_FILE, visited)
 end)
