@@ -16,10 +16,10 @@ local STORAGE_FILE = "sae_visited_servers.json"
 local AUTOEXEC_FILE = "sae_autoexec.json"
 local TELEPORT_FILE = "sae_last_teleport.json"
 local POS_FILE = "sae_pos.json"
-local TELEPORT_COOLDOWN = 15
-local MAX_PAGES = 12
+local TELEPORT_COOLDOWN = 3
+local MAX_PAGES = 100
 local FRIEND_CACHE_TIME = 300
-local HOP_RETRY_DELAY = 4
+local HOP_RETRY_DELAY = 5
 
 local GENV = (getgenv and getgenv()) or _G
 local INSTANCE_ID = (GENV.SAE_INSTANCE_ID or 0) + 1
