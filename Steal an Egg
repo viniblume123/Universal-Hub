@@ -2,7 +2,6 @@ local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -21,56 +20,14 @@ local function Notify(title, content, duration)
     end)
 end
 
--- Bloqueia apenas o Kick do próprio LocalPlayer (isso é seguro e não é FireServer)
-pcall(function()
-    if type(getrawmetatable) == "function" and type(setreadonly) == "function" and type(newcclosure) == "function" then
-        local mt = getrawmetatable(game)
-        local old = mt.__namecall
-        setreadonly(mt, false)
-        mt.__namecall = newcclosure(function(self, ...)
-            if not checkcaller() then
-                if getnamecallmethod() == "Kick" and self == LocalPlayer then return nil end
-            end
-            return old(self, ...)
-        end)
-        setreadonly(mt, true)
-    end
-    for _, v in pairs(getconnections(LocalPlayer.Idled)) do v:Disable() end
-end)
-
--- Guard bypass seguro: só marca atributo, NÃO substitui FireServer
-local function ApplyGuardBypass()
-    pcall(function()
-        local p = ReplicatedStorage:FindFirstChild("Packages")
-        if not p then return end
-        local n = p:FindFirstChild("Networking")
-        if not n then return end
-        local g = n:FindFirstChild("RE/GuardPatrol")
-        if not g then return end
-        for _, r in pairs(g:GetChildren()) do
-            if r:IsA("RemoteEvent") and not r:GetAttribute("HB") then
-                r:SetAttribute("HB", true)
-                -- NADA de FireServer aqui
-            end
-        end
-    end)
-end
-
-ApplyGuardBypass()
-
-task.spawn(function()
-    while true do
-        task.wait(30)
-        ApplyGuardBypass()
-    end
-end)
-
+-- ===== Executa o LennonHub =====
 task.spawn(function()
     pcall(function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/refs/heads/main/stealaneggv2"))()
     end)
 end)
 
+-- ===== Server Hop =====
 local visitedServers = {}
 
 local function getServerList()
@@ -111,6 +68,7 @@ local function markVisited(id)
     if id and id ~= "" then visitedServers[id] = os.time() end
 end
 
+-- ===== GUI =====
 local Gui = Instance.new("ScreenGui")
 Gui.Name = "SAE_" .. tostring(math.random(100000, 999999))
 Gui.ResetOnSpawn = false
@@ -191,6 +149,7 @@ local function makeDraggable(btn, onClick)
     end)
 end
 
+-- ===== Botão: Server Hop =====
 local hopBtn = makeBtn("Server Hop", UDim2.new(0.5, -90, 0.85, 0))
 
 makeDraggable(hopBtn, function()
@@ -227,12 +186,10 @@ makeDraggable(hopBtn, function()
     hopBtn:SetAttribute("Hop", false)
 end)
 
--- ===== AUTO-EXEC CORRIGIDO =====
+-- ===== Botão: Auto-Exec =====
 local persistOn = false
-
 local persistBtn = makeBtn("Auto-Exec: OFF", UDim2.new(0.5, -90, 0.75, 0))
 
--- Detecta a função de fila disponível no executor
 local queueFunc = queue_on_teleport
     or (syn and syn.queue_on_teleport)
     or (fluxus and fluxus.queue_on_teleport)
@@ -246,7 +203,6 @@ local function setQueue(code)
     return false
 end
 
--- Reforça a fila sempre que um teleporte acontecer (garante que o auto-exec persista)
 if queueFunc then
     LocalPlayer.OnTeleport:Connect(function()
         if persistOn and SCRIPT_URL ~= "" then
@@ -291,4 +247,4 @@ task.spawn(function()
     markVisited(game.JobId)
 end)
 
-Notify("Hub", "Lennon + Guard Bypass ativos", 4)
+Notify("Hub", "Lennon carregado + botões ativos", 4)
