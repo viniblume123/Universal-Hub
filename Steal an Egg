@@ -13,7 +13,7 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
-local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 600
@@ -58,8 +58,7 @@ local C = {
     CyanBg      = Color3.fromRGB(24, 54, 52),
     Orange      = Color3.fromRGB(244, 164, 72),
     OrangeBg    = Color3.fromRGB(58, 40, 20),
-    Gold        = Color3.fromRGB(244, 204, 92),
-    Grey        = Color3.fromRGB(140, 140, 160)
+    Gold        = Color3.fromRGB(244, 204, 92)
 }
 
 local VInfo = {
@@ -268,44 +267,48 @@ local function GetGuiContainers()
     return Containers
 end
 
-local Keywords = {"LOOP", "AUTO", "FARM", "TELEPORT", "TOGGLE", "ENABLE", "START"}
-
-local function IsRoundish(Obj)
-    local Corner = Obj:FindFirstChildOfClass("UICorner")
-    if not Corner then
-        local Stroke = Obj:FindFirstChildOfClass("UIStroke")
-        if not Stroke then return false end
+local function IsInsideOurGui(Obj)
+    local Current = Obj
+    while Current do
+        if Current.Name == GUI_NAME then return true end
+        Current = Current.Parent
     end
-    local Cr = Corner and Corner.CornerRadius
-    if Cr and (Cr.X.Scale >= 0.4 or Cr.Offset >= 10) then return true end
-    local Sz = Obj.AbsoluteSize
-    if Sz.X > 0 and Sz.Y > 0 and math.abs(Sz.X - Sz.Y) <= 8 and Sz.X <= 60 then return true end
     return false
 end
 
-local function FireClick(Btn)
-    if not Btn then return false end
-    if not (Btn:IsA("TextButton") or Btn:IsA("ImageButton")) then return false end
-
-    if firesignal then
-        local Ok = pcall(firesignal, Btn.MouseButton1Click)
-        if Ok then return true end
-        local Ok2 = pcall(firesignal, Btn.Activated)
-        if Ok2 then return true end
+local function IsRoundish(Obj)
+    local Corner = Obj:FindFirstChildOfClass("UICorner")
+    if Corner then
+        local Cr = Corner.CornerRadius
+        if Cr.X.Scale >= 0.4 or Cr.Offset >= 10 then return true end
     end
-
-    local Ok3 = pcall(function() Btn:Activate() end)
-    return Ok3
+    local Sz = Obj.AbsoluteSize
+    if Sz.X > 0 and Sz.Y > 0 and math.abs(Sz.X - Sz.Y) <= 10 and Sz.X <= 70 then
+        return true
+    end
+    return false
 end
+
+local HighPriorityKeys = {"LOOP", "TELEPORT"}
+local LowPriorityKeys = {"AUTO", "FARM", "TOGGLE", "ENABLE", "START"}
 
 local function FindToggleCandidates()
     local Cands = {}
     local Seen = {}
 
     local function Add(Obj, Priority)
-        if Seen[Obj] then return end
+        if not Obj or Seen[Obj] then return end
+        if not Obj:IsA("TextButton") and not Obj:IsA("ImageButton") then return end
+        if IsInsideOurGui(Obj) then return end
         Seen[Obj] = true
         table.insert(Cands, {obj = Obj, priority = Priority})
+    end
+
+    local function MatchAny(Text, Keys)
+        for _, K in ipairs(Keys) do
+            if Text:find(K, 1, true) then return true end
+        end
+        return false
     end
 
     for _, Container in ipairs(GetGuiContainers()) do
@@ -314,24 +317,30 @@ local function FindToggleCandidates()
             for _, Obj in ipairs(Desc) do
                 if Obj:IsA("TextLabel") and type(Obj.Text) == "string" and #Obj.Text > 0 then
                     local Up = Obj.Text:upper()
-                    local Matched = false
-                    for _, Kw in ipairs(Keywords) do
-                        if Up:find(Kw, 1, true) then Matched = true; break end
-                    end
-                    if Matched then
+                    local Prio = nil
+                    if MatchAny(Up, HighPriorityKeys) then Prio = 1
+                    elseif MatchAny(Up, LowPriorityKeys) then Prio = 2 end
+
+                    if Prio then
                         local P = Obj.Parent
                         if P then
                             for _, Sib in ipairs(P:GetChildren()) do
                                 if (Sib:IsA("TextButton") or Sib:IsA("ImageButton")) and IsRoundish(Sib) then
-                                    Add(Sib, 1)
+                                    Add(Sib, Prio)
                                 end
                             end
+
                             local Anc = Obj.Parent
-                            for _ = 1, 3 do
+                            for _ = 1, 4 do
                                 if not Anc then break end
                                 if Anc:IsA("TextButton") or Anc:IsA("ImageButton") then
-                                    Add(Anc, 2)
+                                    Add(Anc, Prio)
                                     break
+                                end
+                                for _, Sib in ipairs(Anc:GetChildren()) do
+                                    if (Sib:IsA("TextButton") or Sib:IsA("ImageButton")) and IsRoundish(Sib) then
+                                        Add(Sib, Prio)
+                                    end
                                 end
                                 Anc = Anc.Parent
                             end
@@ -349,7 +358,7 @@ local function FindToggleCandidates()
                 for _, Obj in ipairs(Desc) do
                     if Obj:IsA("TextButton") or Obj:IsA("ImageButton") then
                         local Sz = Obj.AbsoluteSize
-                        if Sz.X > 0 and Sz.X <= 60 and Sz.Y > 0 and Sz.Y <= 60 and IsRoundish(Obj) then
+                        if Sz.X > 0 and Sz.X <= 70 and Sz.Y > 0 and Sz.Y <= 70 and IsRoundish(Obj) then
                             Add(Obj, 3)
                         end
                     end
@@ -362,11 +371,42 @@ local function FindToggleCandidates()
     return Cands
 end
 
+local function ClickButton(Obj)
+    if not Obj or not Obj.Parent or not Obj.Visible then return false end
+
+    local Pos = Obj.AbsolutePosition
+    local Sz = Obj.AbsoluteSize
+    if Sz.X <= 0 or Sz.Y <= 0 then return false end
+
+    local Cx = Pos.X + Sz.X / 2
+    local Cy = Pos.Y + Sz.Y / 2
+
+    local Ok1 = pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(Cx, Cy, 0, true, game, 1)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(Cx, Cy, 0, false, game, 1)
+    end)
+    if Ok1 then
+        task.wait(0.1)
+        return true
+    end
+
+    if firesignal then
+        local Ok2 = pcall(firesignal, Obj.MouseButton1Click)
+        if Ok2 then return true end
+        local Ok3 = pcall(firesignal, Obj.Activated)
+        if Ok3 then return true end
+    end
+
+    local Ok4 = pcall(function() Obj:Activate() end)
+    return Ok4
+end
+
 local function TryClickLennonToggle()
     local Cands = FindToggleCandidates()
     if #Cands == 0 then return false end
     for _, Entry in ipairs(Cands) do
-        if FireClick(Entry.obj) then return true end
+        if ClickButton(Entry.obj) then return true end
     end
     return false
 end
@@ -390,6 +430,7 @@ end
 local function StartLennonAutoClick()
     if State.autoRunning then return end
     State.autoRunning = true
+
     task.spawn(function()
         local FailCount = 0
         while State.autoRunning do
@@ -397,15 +438,12 @@ local function StartLennonAutoClick()
             local ResetAt = Target - RESET_AHEAD
 
             local Now = os.time()
-            if ResetAt > Now then
-                task.wait(ResetAt - Now)
-            end
+            if ResetAt > Now then task.wait(ResetAt - Now) end
+
             ResetCharacter()
 
             Now = os.time()
-            if Target > Now then
-                task.wait(Target - Now)
-            end
+            if Target > Now then task.wait(Target - Now) end
 
             local Ok = TryClickLennonToggle()
             if Ok then
@@ -416,17 +454,11 @@ local function StartLennonAutoClick()
                     Notify("Lennon Hub", "Toggle Not Found", 4)
                     FailCount = 0
                 end
-                local RetryAt = Target + 1
-                Now = os.time()
-                if RetryAt > Now then task.wait(RetryAt - Now) end
+                task.wait(1)
                 TryClickLennonToggle()
             end
 
-            Now = os.time()
-            local NextTarget = GetNextClickTime()
-            if NextTarget > Now then
-                task.wait(math.min(NextTarget - Now, 1))
-            end
+            task.wait(0.1)
         end
     end)
 end
@@ -877,7 +909,7 @@ local function MakeBtn(Text, YPos, Variant)
         TweenService:Create(IconBar, TweenInfo.new(0.14), {Position = UDim2.new(0, 12, 0.5, -9)}):Play()
     end)
 
-    return Btn, Stroke, IconBar
+    return Btn, Stroke
 end
 
 local BtnStartY = PAD + STATS_H + PAD
