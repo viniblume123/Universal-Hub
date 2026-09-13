@@ -1,3 +1,4 @@
+local LENNON_URL = "https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/main/stealaneggv2"
 local SCRIPT_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 local Players = game:GetService("Players")
@@ -12,13 +13,20 @@ local PLACE_ID = game.PlaceId
 local COOLDOWN_TIME = 3600
 local STORAGE_FILE = "sae_visited_servers.json"
 local MAX_PAGES = 10
-local MIN_CANDIDATES = 20
 
 task.spawn(function()
     pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/lennonxscripts/lennonhubv2/refs/heads/main/stealaneggv2"))()
+        loadstring(game:HttpGet(LENNON_URL))()
     end)
 end)
+
+local function httpGet(url)
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and res and res ~= "" then return res end
+    ok, res = pcall(function() return HttpService:GetAsync(url) end)
+    if ok then return res end
+    return nil
+end
 
 local function readVisited()
     local data = {}
@@ -66,27 +74,6 @@ local function markVisited(jobId)
     end
 end
 
-local function httpGet(url)
-    local ok, res = pcall(function() return game:HttpGet(url) end)
-    if ok and res and res ~= "" then return res end
-    ok, res = pcall(function() return HttpService:GetAsync(url) end)
-    if ok then return res end
-    return nil
-end
-
-local function postJson(url, body)
-    local req = (syn and syn.request) or (http and http.request) or http_request or request
-    if not req then return nil end
-    local ok, res = pcall(req, {
-        Url = url,
-        Method = "POST",
-        Body = body,
-        Headers = {["Content-Type"] = "application/json"}
-    })
-    if ok and res and res.Body then return res.Body end
-    return nil
-end
-
 local function getFriendGameIds()
     local ids = {}
     local res = httpGet("https://friends.roblox.com/v1/users/" .. LocalPlayer.UserId .. "/friends")
@@ -96,14 +83,21 @@ local function getFriendGameIds()
     local list = {}
     for _, f in ipairs(data.data) do table.insert(list, f.id) end
     if #list == 0 then return ids end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return ids end
     for i = 1, #list, 100 do
         local batch = {}
         for j = i, math.min(i + 99, #list) do table.insert(batch, list[j]) end
         local body = HttpService:JSONEncode({userIds = batch})
-        local presRes = postJson("https://presence.roblox.com/v1/presence/users", body)
-        if presRes then
-            local ok2, pres = pcall(HttpService.JSONDecode, HttpService, presRes)
-            if ok2 and pres and pres.userPresences then
+        local ok2, res2 = pcall(req, {
+            Url = "https://presence.roblox.com/v1/presence/users",
+            Method = "POST",
+            Body = body,
+            Headers = {["Content-Type"] = "application/json"}
+        })
+        if ok2 and res2 and res2.Body then
+            local ok3, pres = pcall(HttpService.JSONDecode, HttpService, res2.Body)
+            if ok3 and pres and pres.userPresences then
                 for _, p in ipairs(pres.userPresences) do
                     if p.gameId and p.gameId ~= "" then ids[p.gameId] = true end
                 end
@@ -142,7 +136,6 @@ local function findBestServer()
         end
         cursor = data.nextPageCursor
         if not cursor or cursor == "" then break end
-        if #candidates >= MIN_CANDIDATES then break end
     end
     if #candidates == 0 then return nil end
     table.sort(candidates, function(a, b)
@@ -226,6 +219,7 @@ dragArea.AutoButtonColor = false
 dragArea.Parent = panel
 
 local persistOn = false
+local teleportConn = nil
 
 local function makeBtn(text, yPos, isToggle)
     local btn = Instance.new("TextButton")
@@ -327,12 +321,26 @@ local function setQueue(code)
     return true
 end
 
-if queueFunc then
-    LocalPlayer.OnTeleport:Connect(function()
-        if persistOn and SCRIPT_URL ~= "" then
-            queueFunc("loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()")
+local function enableAutoExec()
+    if SCRIPT_URL == "" then return false end
+    if not queueFunc then return false end
+    local code = "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
+    if not setQueue(code) then return false end
+    if teleportConn then teleportConn:Disconnect() end
+    teleportConn = LocalPlayer.OnTeleport:Connect(function()
+        if persistOn then
+            setQueue(code)
         end
     end)
+    return true
+end
+
+local function disableAutoExec()
+    if teleportConn then
+        teleportConn:Disconnect()
+        teleportConn = nil
+    end
+    setQueue("")
 end
 
 persistBtn.MouseButton1Click:Connect(function()
@@ -343,8 +351,7 @@ persistBtn.MouseButton1Click:Connect(function()
             persistBtn.Text = "Auto-Exec  OFF"
             return
         end
-        local code = "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
-        if setQueue(code) then
+        if enableAutoExec() then
             persistOn = true
             persistBtn.Text = "Auto-Exec  ON"
             TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(28, 78, 50)}):Play()
@@ -355,10 +362,15 @@ persistBtn.MouseButton1Click:Connect(function()
             persistBtn.Text = "Auto-Exec  OFF"
         end
     else
-        setQueue("")
+        disableAutoExec()
         persistOn = false
         persistBtn.Text = "Auto-Exec  OFF"
         TweenService:Create(persistBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 42)}):Play()
         TweenService:Create(persistStroke, TweenInfo.new(0.2), {Color = Color3.fromRGB(70, 70, 95), Transparency = 0.4}):Play()
     end
+end)
+
+task.spawn(function()
+    task.wait(2)
+    markVisited(game.JobId)
 end)
