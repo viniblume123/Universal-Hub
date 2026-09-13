@@ -117,8 +117,7 @@ local function MarkVisited(JobId)
 end
 
 local function ReadAutoExec()
-    local D = ReadJson(AUTOEXEC_FILE, {on = false})
-    return D.on == true
+    return ReadJson(AUTOEXEC_FILE, {on = false}).on == true
 end
 
 local function WriteAutoExec(On)
@@ -126,8 +125,7 @@ local function WriteAutoExec(On)
 end
 
 local function ReadLastTeleport()
-    local D = ReadJson(TELEPORT_FILE, {t = 0})
-    return D.t or 0
+    return ReadJson(TELEPORT_FILE, {t = 0}).t or 0
 end
 
 local function WriteLastTeleport(T)
@@ -137,7 +135,7 @@ end
 local function ReadPos()
     local D = ReadJson(POS_FILE, nil)
     if not D or type(D.x) ~= "number" or type(D.y) ~= "number" then return nil end
-    return UDim2.new(D.xs or 0.5, D.x, D.ys or 0.72, D.y)
+    return UDim2.new(D.xs or 0.5, D.x, D.ys or 0.62, D.y)
 end
 
 local function WritePos(Pos)
@@ -178,8 +176,11 @@ end
 local function ReadVersion()
     local D = ReadJson(VERSION_FILE, nil)
     if not D or type(D.version) ~= "string" then return nil end
-    if D.version ~= "lennon" and D.version ~= "on" then return nil end
-    return D.version
+    local Valid = {"lennon", "on", "both", "both_auto"}
+    for _, V in ipairs(Valid) do
+        if D.version == V then return V end
+    end
+    return nil
 end
 
 local function WriteVersion(V)
@@ -195,6 +196,35 @@ do
     else S.execManual = S.execManual + 1 end
     WriteStats(S)
 end
+
+local LoadedHubs = {}
+
+local function TryLoad(Url, Label)
+    if LoadedHubs[Label] then return true end
+    local Src = HttpGet(Url)
+    if not Src or Src == "" then
+        Notify(Label, "No Response from Server", 5)
+        return false
+    end
+    local Fn, Err = loadstring(Src)
+    if not Fn then
+        Notify(Label, "Compile Error", 5)
+        return false
+    end
+    local Ok, RunErr = pcall(Fn)
+    if not Ok then
+        Notify(Label, "Runtime Error", 5)
+        return false
+    end
+    LoadedHubs[Label] = true
+    Notify(Label, "Loaded", 3)
+    return true
+end
+
+task.spawn(function()
+    task.wait(1)
+    TryLoad(ANTISAE_URL, "Anti SAE")
+end)
 
 local FriendCache = {ids = nil, time = 0}
 
@@ -397,8 +427,7 @@ local function StartLennonAutoClick()
     task.spawn(function()
         local FailCount = 0
         while true do
-            local Now = os.time()
-            local Sec = Now % 5
+            local Sec = os.time() % 5
             local Align = (5 - Sec) % 5
             if Align == 0 then Align = 5 end
             task.wait(Align)
@@ -417,14 +446,7 @@ local function StartLennonAutoClick()
 end
 
 pcall(function()
-    local Parents = {CoreGui}
-    local Pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if Pg then table.insert(Parents, Pg) end
-    if gethui then
-        local Ok, Hui = pcall(gethui)
-        if Ok and Hui then table.insert(Parents, Hui) end
-    end
-    for _, P in ipairs(Parents) do
+    for _, P in ipairs(GetGuiContainers()) do
         if P then
             local Old = P:FindFirstChild(GUI_NAME)
             if Old then pcall(function() Old:Destroy() end) end
@@ -451,8 +473,8 @@ if not Gui.Parent then Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local Panel = Instance.new("Frame")
 Panel.Name = "Panel"
-Panel.Size = UDim2.new(0, 230, 0, 314)
-Panel.Position = ReadPos() or UDim2.new(0.5, -115, 0.62, 0)
+Panel.Size = UDim2.new(0, 230, 0, 354)
+Panel.Position = ReadPos() or UDim2.new(0.5, -115, 0.58, 0)
 Panel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 Panel.BorderSizePixel = 0
 Panel.Parent = Gui
@@ -553,6 +575,7 @@ local HopLbl    = MakeStatLabel("Hops", 1)
 local AutoLbl   = MakeStatLabel("Execs (Auto)", 2)
 local ManualLbl = MakeStatLabel("Execs (Manual)", 3)
 local TimeLbl   = MakeStatLabel("Time on Server", 4)
+local VerLbl    = MakeStatLabel("Version", 5)
 
 local PersistOn = false
 
@@ -597,10 +620,11 @@ local function MakeBtn(Text, YPos, IsToggle)
     return Btn, S
 end
 
-local HopBtn = MakeBtn("Server Hop", 152, false)
-local PersistBtn, PersistStroke = MakeBtn("Auto-Exec  Off", 192, true)
-local RefreshBtn = MakeBtn("Refresh Stats", 232, false)
-local VersionBtn = MakeBtn("Change Version", 272, false)
+local HopBtn = MakeBtn("Server Hop", 156, false)
+local PersistBtn, PersistStroke = MakeBtn("Auto-Exec  Off", 196, true)
+local RefreshBtn = MakeBtn("Refresh Stats", 236, false)
+local VersionBtn = MakeBtn("Change Version", 276, false)
+local ResetStatsBtn = MakeBtn("Reset Stats", 316, false)
 
 local RefreshStats
 
@@ -616,8 +640,13 @@ RefreshStats = function()
     HopLbl.Text = "Hops: " .. S.hops
     AutoLbl.Text = "Execs (Auto): " .. S.execAuto
     ManualLbl.Text = "Execs (Manual): " .. S.execManual
-    local Total = os.time() - SESSION_START
-    TimeLbl.Text = "Time on Server: " .. Total .. "s"
+    TimeLbl.Text = "Time on Server: " .. (os.time() - SESSION_START) .. "s"
+    local V = ReadVersion()
+    local Names = {
+        lennon = "Lennon Hub", on = "ON Hub",
+        both = "Both", both_auto = "Both + Auto"
+    }
+    VerLbl.Text = "Version: " .. (V and Names[V] or "Not Selected")
 end
 
 RefreshStats()
@@ -654,11 +683,9 @@ UserInputService.InputEnded:Connect(function(Input)
 end)
 
 local function WaitTeleportCooldown()
-    local Last = ReadLastTeleport()
-    local Elapsed = os.time() - Last
+    local Elapsed = os.time() - ReadLastTeleport()
     if Elapsed < TELEPORT_COOLDOWN then
-        local Remaining = TELEPORT_COOLDOWN - Elapsed
-        for I = Remaining, 1, -1 do
+        for I = (TELEPORT_COOLDOWN - Elapsed), 1, -1 do
             HopBtn.Text = "Waiting " .. I .. "s..."
             task.wait(1)
         end
@@ -672,27 +699,21 @@ HopBtn.MouseButton1Click:Connect(function()
     HopBusy = true
     task.spawn(function()
         HopBtn.Text = "Searching..."
-
         while HopBusy do
             WaitTeleportCooldown()
-
             local OkFind, Server = pcall(FindBestServer)
             if not OkFind then Server = nil end
-
             if not Server then
                 task.wait(0.5)
-                local OkFind2, Server2 = pcall(FindBestServer)
-                if OkFind2 then Server = Server2 end
+                local Ok2, S2 = pcall(FindBestServer)
+                if Ok2 then Server = S2 end
             end
-
             if Server then
                 MarkVisited(Server.id)
                 HopBtn.Text = "Joining..."
-
                 local Ok = pcall(function()
                     TeleportService:TeleportToPlaceInstance(PLACE_ID, Server.id, LocalPlayer)
                 end)
-
                 if not Ok then
                     HopBtn.Text = "Failed, Retry..."
                     task.wait(HOP_RETRY_DELAY)
@@ -709,7 +730,6 @@ HopBtn.MouseButton1Click:Connect(function()
                 task.wait(HOP_RETRY_DELAY)
             end
         end
-
         HopBtn.Text = "Server Hop"
     end)
 end)
@@ -724,10 +744,23 @@ local function BuildLoader()
         'local H = game:GetService("HttpService") ' ..
         'local ok2, d = pcall(H.JSONDecode, H, c) ' ..
         'if ok2 and type(d) == "table" and d.on == true then ' ..
-        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. LENNON_URL .. '"))() end) end) ' ..
-        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. ONHUB_URL .. '", true))() end) end) ' ..
-        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. ANTISAE_URL .. '"))() end) end) ' ..
-        'task.spawn(function() pcall(function() loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))() end) end) ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. ANTISAE_URL .. '"))() end) ' ..
+        'local v = "on" ' ..
+        'if isfile and isfile("sae_version.json") then ' ..
+        'local o, cc = pcall(readfile, "sae_version.json") ' ..
+        'if o and cc then ' ..
+        'local o2, dd = pcall(H.JSONDecode, H, cc) ' ..
+        'if o2 and type(dd) == "table" and type(dd.version) == "string" then v = dd.version end ' ..
+        'end end ' ..
+        'if v == "lennon" then ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. LENNON_URL .. '"))() end) ' ..
+        'elseif v == "on" then ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. ONHUB_URL .. '", true))() end) ' ..
+        'else ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. LENNON_URL .. '"))() end) ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. ONHUB_URL .. '", true))() end) ' ..
+        'end ' ..
+        'pcall(function() loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))() end) ' ..
         'end end end'
 end
 
@@ -796,8 +829,8 @@ ModalOverlay.ZIndex = 50
 ModalOverlay.Parent = Gui
 
 local Modal = Instance.new("Frame")
-Modal.Size = UDim2.new(0, 280, 0, 170)
-Modal.Position = UDim2.new(0.5, -140, 0.5, -85)
+Modal.Size = UDim2.new(0, 300, 0, 190)
+Modal.Position = UDim2.new(0.5, -150, 0.5, -95)
 Modal.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 Modal.BorderSizePixel = 0
 Modal.ZIndex = 51
@@ -823,7 +856,7 @@ ModalGradient.Parent = Modal
 
 local ModalTitle = Instance.new("TextLabel")
 ModalTitle.Size = UDim2.new(1, -20, 0, 26)
-ModalTitle.Position = UDim2.new(0, 10, 0, 12)
+ModalTitle.Position = UDim2.new(0, 10, 0, 10)
 ModalTitle.BackgroundTransparency = 1
 ModalTitle.Text = "Choose Your Version"
 ModalTitle.Font = Enum.Font.GothamBold
@@ -834,29 +867,31 @@ ModalTitle.Parent = Modal
 
 local ModalDesc = Instance.new("TextLabel")
 ModalDesc.Size = UDim2.new(1, -20, 0, 20)
-ModalDesc.Position = UDim2.new(0, 10, 0, 38)
+ModalDesc.Position = UDim2.new(0, 10, 0, 34)
 ModalDesc.BackgroundTransparency = 1
-ModalDesc.Text = "Lennon Hub or ON Hub?"
+ModalDesc.Text = "Select Which Hub to Load"
 ModalDesc.Font = Enum.Font.Gotham
 ModalDesc.TextSize = 12
 ModalDesc.TextColor3 = Color3.fromRGB(200, 200, 220)
 ModalDesc.ZIndex = 52
 ModalDesc.Parent = Modal
 
-local ModalRow = Instance.new("Frame")
-ModalRow.Size = UDim2.new(1, -20, 0, 38)
-ModalRow.Position = UDim2.new(0, 10, 0, 70)
-ModalRow.BackgroundTransparency = 1
-ModalRow.ZIndex = 52
-ModalRow.Parent = Modal
+local function MakeRow(YPos)
+    local Row = Instance.new("Frame")
+    Row.Size = UDim2.new(1, -20, 0, 38)
+    Row.Position = UDim2.new(0, 10, 0, YPos)
+    Row.BackgroundTransparency = 1
+    Row.ZIndex = 52
+    Row.Parent = Modal
+    local L = Instance.new("UIListLayout")
+    L.FillDirection = Enum.FillDirection.Horizontal
+    L.Padding = UDim.new(0, 8)
+    L.SortOrder = Enum.SortOrder.LayoutOrder
+    L.Parent = Row
+    return Row
+end
 
-local ModalRowLayout = Instance.new("UIListLayout")
-ModalRowLayout.FillDirection = Enum.FillDirection.Horizontal
-ModalRowLayout.Padding = UDim.new(0, 8)
-ModalRowLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ModalRowLayout.Parent = ModalRow
-
-local function MakeModalBtn(Text, Color, Order)
+local function MakeActionBtn(Parent, Text, Color, Order)
     local B = Instance.new("TextButton")
     B.Size = UDim2.new(0.5, -4, 1, 0)
     B.BackgroundColor3 = Color
@@ -868,7 +903,7 @@ local function MakeModalBtn(Text, Color, Order)
     B.AutoButtonColor = false
     B.LayoutOrder = Order
     B.ZIndex = 53
-    B.Parent = ModalRow
+    B.Parent = Parent
     local C = Instance.new("UICorner")
     C.CornerRadius = UDim.new(0, 8)
     C.Parent = B
@@ -886,99 +921,90 @@ local function MakeModalBtn(Text, Color, Order)
     return B
 end
 
-local ModalBtnLennon = MakeModalBtn("Lennon Hub", Color3.fromRGB(60, 60, 120), 1)
-local ModalBtnOn = MakeModalBtn("ON Hub", Color3.fromRGB(60, 100, 80), 2)
+local Row1 = MakeRow(62)
+local Row2 = MakeRow(108)
 
-local ConfirmRow = Instance.new("Frame")
-ConfirmRow.Size = UDim2.new(1, -20, 0, 38)
-ConfirmRow.Position = UDim2.new(0, 10, 0, 70)
-ConfirmRow.BackgroundTransparency = 1
-ConfirmRow.ZIndex = 52
+local BtnLennon    = MakeActionBtn(Row1, "Lennon Hub", Color3.fromRGB(70, 60, 120), 1)
+local BtnOn        = MakeActionBtn(Row1, "ON Hub",     Color3.fromRGB(50, 90, 130), 2)
+local BtnBoth      = MakeActionBtn(Row2, "Both",       Color3.fromRGB(60, 80, 90),  1)
+local BtnBothAuto  = MakeActionBtn(Row2, "Both + Auto", Color3.fromRGB(90, 70, 40), 2)
+
+local ConfirmRow = MakeRow(62)
 ConfirmRow.Visible = false
-ConfirmRow.Parent = Modal
 
-local ConfirmRowLayout = Instance.new("UIListLayout")
-ConfirmRowLayout.FillDirection = Enum.FillDirection.Horizontal
-ConfirmRowLayout.Padding = UDim.new(0, 8)
-ConfirmRowLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ConfirmRowLayout.Parent = ConfirmRow
-
-local function MakeConfirmBtn(Text, Color, Order)
-    local B = Instance.new("TextButton")
-    B.Size = UDim2.new(0.5, -4, 1, 0)
-    B.BackgroundColor3 = Color
-    B.Text = Text
-    B.TextColor3 = Color3.fromRGB(240, 240, 250)
-    B.Font = Enum.Font.GothamMedium
-    B.TextSize = 12
-    B.BorderSizePixel = 0
-    B.AutoButtonColor = false
-    B.LayoutOrder = Order
-    B.ZIndex = 53
-    B.Parent = ConfirmRow
-    local C = Instance.new("UICorner")
-    C.CornerRadius = UDim.new(0, 8)
-    C.Parent = B
-    local S = Instance.new("UIStroke")
-    S.Color = Color3.fromRGB(90, 90, 120)
-    S.Thickness = 1
-    S.Transparency = 0.5
-    S.Parent = B
-    B.MouseEnter:Connect(function()
-        TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Color:Lerp(Color3.fromRGB(255,255,255), 0.15)}):Play()
-    end)
-    B.MouseLeave:Connect(function()
-        TweenService:Create(B, TweenInfo.new(0.12), {BackgroundColor3 = Color}):Play()
-    end)
-    return B
-end
-
-local ConfirmYes = MakeConfirmBtn("Confirm", Color3.fromRGB(170, 55, 55), 1)
-local ConfirmNo = MakeConfirmBtn("Cancel", Color3.fromRGB(50, 50, 70), 2)
+local ConfirmYes = MakeActionBtn(ConfirmRow, "Confirm", Color3.fromRGB(170, 55, 55), 1)
+local ConfirmNo  = MakeActionBtn(ConfirmRow, "Cancel",  Color3.fromRGB(50, 50, 70),  2)
 
 local PendingVersion = nil
-local LennonAutoRunning = false
+local LennonAutoStarted = false
+
+local function VersionName(V)
+    local Names = {
+        lennon = "Lennon Hub", on = "ON Hub",
+        both = "Both Hubs", both_auto = "Both Hubs + Lennon Auto"
+    }
+    return Names[V] or V
+end
 
 local function ApplyVersion(V)
     WriteVersion(V)
     if V == "lennon" then
-        if not LennonAutoRunning then
-            LennonAutoRunning = true
+        TryLoad(LENNON_URL, "Lennon Hub")
+    elseif V == "on" then
+        TryLoad(ONHUB_URL, "ON Hub")
+    elseif V == "both" then
+        TryLoad(LENNON_URL, "Lennon Hub")
+        task.wait(0.6)
+        TryLoad(ONHUB_URL, "ON Hub")
+    elseif V == "both_auto" then
+        TryLoad(LENNON_URL, "Lennon Hub")
+        task.wait(0.6)
+        TryLoad(ONHUB_URL, "ON Hub")
+        if not LennonAutoStarted then
+            LennonAutoStarted = true
             StartLennonAutoClick()
+            Notify("Lennon Hub", "Auto-Click Started", 4)
         end
     end
-    Notify("Version", "Now Using: " .. (V == "lennon" and "Lennon Hub" or "ON Hub"), 4)
+    pcall(RefreshStats)
 end
 
 local function ShowPicker()
     ModalOverlay.Visible = true
-    ModalRow.Visible = true
+    Row1.Visible = true
+    Row2.Visible = true
     ConfirmRow.Visible = false
     ModalTitle.Text = "Choose Your Version"
-    ModalDesc.Text = "Lennon Hub or ON Hub?"
+    ModalDesc.Text = "Select Which Hub to Load"
 end
 
 local function ShowConfirm(V)
     PendingVersion = V
-    ModalRow.Visible = false
+    Row1.Visible = false
+    Row2.Visible = false
     ConfirmRow.Visible = true
     ModalTitle.Text = "Are You Sure?"
-    ModalDesc.Text = "Use " .. (V == "lennon" and "Lennon Hub" or "ON Hub") .. "?"
+    ModalDesc.Text = "Use " .. VersionName(V) .. "?"
 end
 
 local function HideModal()
     ModalOverlay.Visible = false
 end
 
-ModalBtnLennon.MouseButton1Click:Connect(function() ShowConfirm("lennon") end)
-ModalBtnOn.MouseButton1Click:Connect(function() ShowConfirm("on") end)
+BtnLennon.MouseButton1Click:Connect(function() ShowConfirm("lennon") end)
+BtnOn.MouseButton1Click:Connect(function() ShowConfirm("on") end)
+BtnBoth.MouseButton1Click:Connect(function() ShowConfirm("both") end)
+BtnBothAuto.MouseButton1Click:Connect(function() ShowConfirm("both_auto") end)
 
 ConfirmYes.MouseButton1Click:Connect(function()
     if PendingVersion then
-        ApplyVersion(PendingVersion)
+        local V = PendingVersion
         PendingVersion = nil
+        HideModal()
+        ApplyVersion(V)
+    else
+        HideModal()
     end
-    HideModal()
 end)
 
 ConfirmNo.MouseButton1Click:Connect(function()
@@ -990,21 +1016,32 @@ VersionBtn.MouseButton1Click:Connect(function()
     ShowPicker()
 end)
 
-RefreshBtn.MouseButton1Click:Connect(function()
-    ResetStats()
-end)
+local ResetConfirm = false
 
-local function ShowResetConfirm()
+RefreshBtn.MouseButton1Click:Connect(function()
+    ResetConfirm = true
     ModalOverlay.Visible = true
-    ModalRow.Visible = false
+    Row1.Visible = false
+    Row2.Visible = false
     ConfirmRow.Visible = true
     ModalTitle.Text = "Are You Sure?"
     ModalDesc.Text = "This Will Reset All Stats"
-    ConfirmYes.MouseButton1Click:Connect(function()
+end)
+
+ResetStatsBtn.MouseButton1Click:Connect(function()
+    ResetStats()
+end)
+
+ConfirmYes.MouseButton1Click:Connect(function()
+    if ResetConfirm then
+        ResetConfirm = false
         ResetStats()
-        HideModal()
-    end)
-end
+    end
+end)
+
+ConfirmNo.MouseButton1Click:Connect(function()
+    ResetConfirm = false
+end)
 
 if ReadAutoExec() then
     if EnableAutoExec() then
@@ -1017,17 +1054,12 @@ task.spawn(function()
     MarkVisited(game.JobId)
 end)
 
-local SavedVersion = ReadVersion()
-if SavedVersion then
-    ApplyVersion(SavedVersion)
-else
-    Panel.Visible = false
-    ShowPicker()
-    local Hook
-    Hook = ModalBtnLennon.MouseButton1Click:Connect(function() end)
-end
-
 task.spawn(function()
-    while not ReadVersion() do task.wait(0.2) end
-    Panel.Visible = true
+    task.wait(1)
+    local Saved = ReadVersion()
+    if Saved then
+        ApplyVersion(Saved)
+    else
+        ShowPicker()
+    end
 end)
