@@ -127,15 +127,35 @@ end
 
 loadConfig()
 
+local function normalizeName(s)
+    if type(s) ~= "string" then return "" end
+    s = s:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+    return s
+end
+
+local function nameMatches(a, b)
+    local na = normalizeName(a)
+    local nb = normalizeName(b)
+    if na == "" or nb == "" then return false end
+    if na == nb then return true end
+    local sa = na:gsub(" egg$", ""):gsub(" pet$", "")
+    local sb = nb:gsub(" egg$", ""):gsub(" pet$", "")
+    if sa == sb then return true end
+    if sa:find(sb, 1, true) then return true end
+    if sb:find(sa, 1, true) then return true end
+    return false
+end
+
 local snapshotRemote = nil
-local remoteFound = false
+local lastSnapshotNames = {}
 
 local function findSnapshotRemote()
     for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
         if d:IsA("RemoteFunction") then
             local n = d.Name:lower()
-            if n:find("askfieldeggsnapshot") or n:find("fieldreggsnapshot")
-               or n:find("fieldeggsnapshot") or n:find("eggsnapshot")
+            if n:find("askfieldeggsnapshot")
+               or n:find("fieldeggsnapshot")
+               or n:find("eggsnapshot")
                or (n:find("snapshot") and n:find("egg")) then
                 return d
             end
@@ -147,9 +167,6 @@ end
 local function getSnap()
     if not snapshotRemote then
         snapshotRemote = findSnapshotRemote()
-        if snapshotRemote then
-            remoteFound = true
-        end
     end
     if not snapshotRemote then return {} end
     local ok, s = pcall(function() return snapshotRemote:InvokeServer() end)
@@ -160,6 +177,13 @@ local function getSnap()
         else
             for _, v in pairs(s) do
                 if type(v) == "table" then table.insert(arr, v) end
+            end
+        end
+        lastSnapshotNames = {}
+        for _, egg in ipairs(arr) do
+            if type(egg) == "table" then
+                local n = egg.Name or egg.EggName or egg.PetName or "?"
+                table.insert(lastSnapshotNames, tostring(n))
             end
         end
         return arr
@@ -205,11 +229,12 @@ end
 
 local function checkEggs()
     local snap = getSnap()
-    if #snap == 0 then return false, 0, nil, false end
+    if #snap == 0 then return false, 0, nil, false, 0 end
 
     local minMoney = parseMoney(CONFIG.MinMoneyText)
     local bestV, bestE = 0, nil
     local anySpawned = false
+    local matchCount = 0
 
     local hasEggFilter = setSize(CONFIG.SelectedEggs) > 0
 
@@ -220,18 +245,22 @@ local function checkEggs()
         local muts = egg.Mutations or {}
         if type(muts) ~= "table" then muts = {} end
 
+        local matched = true
         if hasEggFilter then
-            local found = false
+            matched = false
             for name in pairs(CONFIG.SelectedEggs) do
-                if en == name then
-                    found = true
+                if nameMatches(en, name) then
+                    matched = true
                     break
                 end
             end
-            if not found then continue end
         end
 
+        if not matched then continue end
+
         anySpawned = true
+        matchCount = matchCount + 1
+
         local rate = egg.EarningRate or egg.Rate or 0
         local scale = egg.Scale or 1
         local v = rate * (scale ^ 1.85)
@@ -246,7 +275,7 @@ local function checkEggs()
         end
     end
 
-    return bestV >= minMoney, bestV, bestE, anySpawned
+    return bestV >= minMoney, bestV, bestE, anySpawned, matchCount
 end
 
 local function doHop()
@@ -1033,6 +1062,25 @@ addButton(SecActions, {
         doHop()
     end,
 })
+addButton(SecActions, {
+    Title = "Show Detected Eggs (Debug)",
+    Callback = function()
+        local snap = getSnap()
+        if #snap == 0 then
+            notify({ Title = "Debug", Content = "Snapshot vazio ou remote nao encontrado.", Duration = 8 })
+            return
+        end
+        local names = {}
+        for i = 1, math.min(6, #lastSnapshotNames) do
+            table.insert(names, lastSnapshotNames[i])
+        end
+        notify({
+            Title = "Debug · " .. #snap .. " eggs",
+            Content = table.concat(names, "\n"),
+            Duration = 10,
+        })
+    end,
+})
 
 local SecTarget = makeSection("Target")
 addMoneyInput(SecTarget, {
@@ -1088,7 +1136,7 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    local enough, bestV, eggName, anySpawned = checkEggs()
+    local enough, bestV, eggName, anySpawned, matchCount = checkEggs()
 
     if enough then
         if lastState ~= "stay" then
@@ -1105,7 +1153,7 @@ RunService.Heartbeat:Connect(function()
             lastState = "hop"
             setStatus("waiting")
             notify({
-                Title = "Hopping",
+                Title = "Hopping · " .. matchCount .. " matched",
                 Content = (eggName or "?") .. " · " .. formatMoney(bestV) .. " $/s",
                 Duration = 4,
             })
