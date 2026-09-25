@@ -1,7 +1,7 @@
 local AUTO_EXEC_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
@@ -23,34 +23,317 @@ local CONFIG = {
     MaxPlayers = 7,
     MinMoneyText = "1000000",
     SelectedEggs = {},
-    SelectedRarities = {},
-    SelectedMutations = {},
-    SelectedAreas = {},
 }
 
 local ALL_EGGS = {
-    "Mosasaurus Egg", "Eternal Lunar Dragon Egg", "Unicorn Egg",
-    "Oni Tiger Egg", "Kitsune Egg", "Mutant Shark Egg", "Gorilla King Egg",
-    "NightFlame Egg", "Centaur Egg", "Gargoyle Egg", "Pure Jellyfish Egg",
-    "RazorFang Egg", "Pegasus Egg", "Skeleton Horse Egg", "ArchAngel Egg",
-    "World Burner Egg",
+    "Mosasaurus", "Eternal Lunar Dragon", "Unicorn",
+    "Oni Tiger", "Kitsune", "Mutant Shark", "Gorilla King",
+    "NightFlame", "Centaur", "Gargoyle", "Pure Jellyfish",
+    "RazorFang", "Pegasus", "Skeleton Horse", "ArchAngel",
+    "World Burner",
 }
 
-local ALL_RARITIES = { "Secret", "Eternal", "Divine" }
+local Assets, Save, Networking
 
-local ALL_MUTATIONS = {
-    "Silver", "Bloom", "Golden", "Rainbow",
-    "Spirit Bloom", "Monstrous", "Parasite", "Fractured",
-}
+pcall(function()
+    local sh = RS:FindFirstChild("Shared")
+    if sh and sh:FindFirstChild("Save") then Save = require(sh.Save) end
+    local dt = RS:FindFirstChild("Data")
+    if dt and dt:FindFirstChild("Assets") then Assets = require(dt.Assets) end
+    local pk = RS:FindFirstChild("Packages")
+    if pk and pk:FindFirstChild("Networking") then Networking = pk.Networking end
+end)
 
-local ALL_AREAS = {
-    "Prehistoric", "Cosmic", "Cherry Blossom", "Titan Temple", "Angels and Demons",
-}
+local function deepLookupName(cat)
+    if not Assets then return nil end
+    local candidates = { Assets.Directory, Assets.Assets, Assets.Eggs, Assets.Pets, Assets }
+    for _, dir in ipairs(candidates) do
+        if type(dir) == "table" then
+            local e = dir[cat]
+            if e then
+                if type(e) == "string" then return e end
+                if type(e) == "table" then
+                    return e.DisplayName or e.Name or e.Title or e.EggName
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function deepLookupRate(cat)
+    if not Assets then return 0 end
+    local candidates = { Assets.Directory, Assets.Assets, Assets.Eggs, Assets.Pets, Assets }
+    for _, dir in ipairs(candidates) do
+        if type(dir) == "table" then
+            local e = dir[cat]
+            if type(e) == "table" then
+                local r = e.EarningRate or e.Rate or e.Income or e.BaseEarning or e.MoneyPerSecond
+                if type(r) == "number" and r > 0 then return r end
+            end
+        end
+    end
+    return 0
+end
+
+local cachedEggs = {}
+local hookCount = 0
+local lastDebugSample = nil
+
+local function looksLikeEggList(tbl)
+    if type(tbl) ~= "table" then return false end
+    local checked = 0
+    for _, v in pairs(tbl) do
+        if type(v) == "table" then
+            checked = checked + 1
+            if v.AssetCategory or v.Category or v.Uid or v.EggId then return true end
+            if checked >= 3 then break end
+        end
+    end
+    return false
+end
+
+local function updateCache(res)
+    if not looksLikeEggList(res) then return false end
+    cachedEggs = {}
+    for _, v in pairs(res) do
+        if type(v) == "table" then table.insert(cachedEggs, v) end
+    end
+    if not lastDebugSample and #cachedEggs > 0 then
+        lastDebugSample = cachedEggs[1]
+    end
+    return true
+end
+
+local function isSystemRemote(d)
+    local path = d:GetFullName()
+    if path:find("Cmdr") then return true end
+    if path:find("Chat") then return true end
+    if path:find("PlayerModule") then return true end
+    if path:find("SoundService") then return true end
+    return false
+end
+
+local function installHooks()
+    local roots = {}
+    if Networking then table.insert(roots, Networking) end
+    local nw = RS:FindFirstChild("Network")
+    if nw then table.insert(roots, nw) end
+
+    if #roots == 0 then
+        table.insert(roots, RS)
+    end
+
+    for _, root in ipairs(roots) do
+        for _, d in ipairs(root:GetDescendants()) do
+            if d:IsA("RemoteFunction") and not isSystemRemote(d) then
+                pcall(function()
+                    local old = d.InvokeServer
+                    if type(old) ~= "function" then return end
+                    d.InvokeServer = newcclosure(function(self, ...)
+                        local res = old(self, ...)
+                        updateCache(res)
+                        return res
+                    end)
+                    hookCount = hookCount + 1
+                end)
+            end
+        end
+    end
+end
+
+installHooks()
+
+local function findSnapshotRemote()
+    local roots = {}
+    if Networking then table.insert(roots, Networking) end
+    local nw = RS:FindFirstChild("Network")
+    if nw then table.insert(roots, nw) end
+    if #roots == 0 then table.insert(roots, RS) end
+
+    for _, root in ipairs(roots) do
+        for _, d in ipairs(root:GetDescendants()) do
+            if d:IsA("RemoteFunction") then
+                local n = d.Name:lower()
+                if n:find("snapshot") or n:find("askfieldegg") then
+                    return d
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local SnapshotRemote = findSnapshotRemote()
+
+local function refreshSnapshot()
+    if not SnapshotRemote then
+        SnapshotRemote = findSnapshotRemote()
+        if not SnapshotRemote then return false end
+    end
+    local ok, res = pcall(function() return SnapshotRemote:InvokeServer() end)
+    if ok and type(res) == "table" then
+        return updateCache(res)
+    end
+    return false
+end
+
+local function getEggName(egg)
+    if type(egg) ~= "table" then return "?" end
+    local cat = egg.AssetCategory or egg.Category or egg.Asset or egg.EggId
+    if cat then
+        local n = deepLookupName(cat)
+        if n then return n end
+    end
+    return egg.Name or egg.EggName or tostring(cat) or "?"
+end
+
+local function getEggValue(egg)
+    if type(egg) ~= "table" then return 0 end
+    if type(egg.Value) == "number" and egg.Value > 0 then return egg.Value end
+    local cat = egg.AssetCategory or egg.Category or egg.Asset or egg.EggId
+    local rate = 0
+    if cat then rate = deepLookupRate(cat) end
+    if rate == 0 then
+        rate = egg.EarningRate or egg.Rate or egg.Income or 0
+    end
+    if type(rate) ~= "number" then return 0 end
+    local scale = egg.Scale or egg.Size or 1
+    if type(scale) ~= "number" then scale = 1 end
+    local v = rate * (scale ^ 1.85)
+    local muts = egg.Mutations or {}
+    if type(muts) == "table" then
+        for _, m in ipairs(muts) do
+            if type(m) == "table" then
+                v = v * (m.Multiplier or m.EarningMulti or 1)
+            end
+        end
+    end
+    return v
+end
+
+local function normalizeName(s)
+    if type(s) ~= "string" then return "" end
+    return s:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+end
+
+local function nameMatches(a, b)
+    local na = normalizeName(a)
+    local nb = normalizeName(b)
+    if na == "" or nb == "" then return false end
+    if na == nb then return true end
+    local sa = na:gsub(" egg$", ""):gsub(" pet$", "")
+    local sb = nb:gsub(" egg$", ""):gsub(" pet$", "")
+    if sa == sb then return true end
+    if sa:find(sb, 1, true) then return true end
+    if sb:find(sa, 1, true) then return true end
+    return false
+end
+
+local function parseMoney(s)
+    if type(s) == "number" then return s end
+    if type(s) ~= "string" then return 0 end
+    local clean = s:gsub("[%s,]", ""):upper()
+    local suf = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, Q = 1e15 }
+    local n = tonumber(clean)
+    if n then return n end
+    local sfx = clean:match("([KMBTQ])$")
+    if sfx then
+        local base = tonumber(clean:sub(1, -2))
+        if base then return base * suf[sfx] end
+    end
+    return 0
+end
+
+local function formatMoney(n)
+    if type(n) ~= "number" then return "0" end
+    if n >= 1e15 then return string.format("%.2fQ", n / 1e15) end
+    if n >= 1e12 then return string.format("%.2fT", n / 1e12) end
+    if n >= 1e9 then return string.format("%.2fB", n / 1e9) end
+    if n >= 1e6 then return string.format("%.2fM", n / 1e6) end
+    if n >= 1e3 then return string.format("%.2fK", n / 1e3) end
+    return tostring(math.floor(n))
+end
+
+local function getServers()
+    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?limit=100"):format(PlaceId)
+    local ok, b = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
+    return ok and b and b.data or {}
+end
+
+local function findServer()
+    local servers = getServers()
+    local pool = {}
+    for _, s in ipairs(servers) do
+        if s.id ~= JobId and (s.playing or 0) < (s.maxPlayers or 50) then
+            local n = s.playing or 0
+            if n <= CONFIG.MaxPlayers then table.insert(pool, s) end
+        end
+    end
+    if #pool == 0 then
+        for _, s in ipairs(servers) do
+            if s.id ~= JobId and (s.playing or 0) < (s.maxPlayers or 50) then return s.id end
+        end
+        return nil
+    end
+    table.sort(pool, function(a, b) return (a.playing or 0) < (b.playing or 0) end)
+    return pool[1].id
+end
+
+local function setSize(set)
+    if type(set) ~= "table" then return 0 end
+    local n = 0
+    for _ in pairs(set) do n = n + 1 end
+    return n
+end
+
+local function checkEggs()
+    local minMoney = parseMoney(CONFIG.MinMoneyText)
+    local hasEggFilter = setSize(CONFIG.SelectedEggs) > 0
+
+    if #cachedEggs == 0 then return false, 0, nil, false, 0, "no-cache" end
+
+    local bestV, bestE = 0, nil
+    local anySpawned = false
+    local matchCount = 0
+
+    for _, egg in ipairs(cachedEggs) do
+        local en = getEggName(egg)
+        local matched = not hasEggFilter
+        if hasEggFilter then
+            for target in pairs(CONFIG.SelectedEggs) do
+                if nameMatches(en, target) then matched = true break end
+            end
+        end
+        if matched then
+            anySpawned = true
+            matchCount = matchCount + 1
+            local v = getEggValue(egg)
+            if v > bestV then bestV = v bestE = en end
+        end
+    end
+
+    return bestV >= minMoney, bestV, bestE, anySpawned, matchCount, "ok"
+end
+
+local function doHop()
+    local t = findServer()
+    if t then TeleportService:TeleportToPlaceInstance(PlaceId, t, LocalPlayer)
+    else TeleportService:Teleport(PlaceId, LocalPlayer) end
+end
+
+local function queueAutoExec()
+    if AUTO_EXEC_URL == "" then return end
+    local ok, src = pcall(game.HttpGet, game, AUTO_EXEC_URL)
+    if not ok or not src then return end
+    local f = queue_on_teleport or (syn and syn.queue_on_teleport)
+        or (fluxus and fluxus.queue_on_teleport) or (krnl and krnl.queue_on_teleport)
+    if f then pcall(f, src) end
+end
 
 local C = {
     Bg = Color3.fromRGB(11, 11, 15),
     Panel = Color3.fromRGB(17, 17, 23),
-    Card = Color3.fromRGB(23, 23, 31),
     Element = Color3.fromRGB(28, 28, 38),
     Hover = Color3.fromRGB(38, 38, 50),
     Accent = Color3.fromRGB(255, 45, 75),
@@ -61,7 +344,6 @@ local C = {
     BorderSoft = Color3.fromRGB(30, 30, 40),
     Green = Color3.fromRGB(34, 197, 94),
     Number = Color3.fromRGB(255, 200, 100),
-    NumberDim = Color3.fromRGB(160, 130, 70),
 }
 
 local function mk(cls, props, parent)
@@ -82,36 +364,9 @@ local function pad(p, t, r, b, l)
     }, p)
 end
 
-local function formatMoney(n)
-    if type(n) ~= "number" then return "0" end
-    if n >= 1e15 then return string.format("%.2fQ", n / 1e15) end
-    if n >= 1e12 then return string.format("%.2fT", n / 1e12) end
-    if n >= 1e9 then return string.format("%.2fB", n / 1e9) end
-    if n >= 1e6 then return string.format("%.2fM", n / 1e6) end
-    if n >= 1e3 then return string.format("%.2fK", n / 1e3) end
-    return tostring(math.floor(n))
-end
-
-local function parseMoney(s)
-    if type(s) == "number" then return s end
-    if type(s) ~= "string" then return 0 end
-    local clean = s:gsub("[%s,]", ""):upper()
-    local suf = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, Q = 1e15 }
-    local n = tonumber(clean)
-    if n then return n end
-    local sfx = clean:match("([KMBTQ])$")
-    if sfx then
-        local base = tonumber(clean:sub(1, -2))
-        if base then return base * suf[sfx] end
-    end
-    return 0
-end
-
 local function saveConfig()
     if not writefile then return end
-    pcall(function()
-        writefile(CFG_FILE, HttpService:JSONEncode(CONFIG))
-    end)
+    pcall(function() writefile(CFG_FILE, HttpService:JSONEncode(CONFIG)) end)
 end
 
 local function loadConfig()
@@ -127,243 +382,20 @@ end
 
 loadConfig()
 
-local function normalizeName(s)
-    if type(s) ~= "string" then return "" end
-    return s:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
-end
-
-local function nameMatches(a, b)
-    local na = normalizeName(a)
-    local nb = normalizeName(b)
-    if na == "" or nb == "" then return false end
-    if na == nb then return true end
-    local sa = na:gsub(" egg$", ""):gsub(" pet$", "")
-    local sb = nb:gsub(" egg$", ""):gsub(" pet$", "")
-    if sa == sb then return true end
-    if sa:find(sb, 1, true) then return true end
-    if sb:find(sa, 1, true) then return true end
-    return false
-end
-
--- ============================================================
--- EGG VALUE INTERCEPTOR
--- ============================================================
-
-local cachedEggs = {}
-local eggRemote = nil
-local hookCount = 0
-local lastCacheTime = 0
-
-local function looksLikeEggData(tbl)
-    if type(tbl) ~= "table" then return false end
-    local checked = 0
-    for _, v in pairs(tbl) do
-        if type(v) == "table" then
-            checked = checked + 1
-            local hasName = v.Name or v.EggName or v.PetName or v.Id
-            local hasValue = v.Value or v.EarningRate or v.Rate or v.Income or v.Worth
-            if hasName and hasValue then
-                return true
-            end
-            if checked >= 3 then break end
-        end
-    end
-    return false
-end
-
-local function updateCacheFromResponse(res)
-    if not looksLikeEggData(res) then return false end
-    cachedEggs = {}
-    for k, v in pairs(res) do
-        if type(v) == "table" then
-            table.insert(cachedEggs, v)
-        end
-    end
-    lastCacheTime = tick()
-    return true
-end
-
-local function installHooks()
-    for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
-        if d:IsA("RemoteFunction") then
-            local ok, err = pcall(function()
-                local old = d.InvokeServer
-                d.InvokeServer = newcclosure(function(self, ...)
-                    local res = old(self, ...)
-                    if updateCacheFromResponse(res) then
-                        if not eggRemote then
-                            eggRemote = self
-                        end
-                    end
-                    return res
-                end)
-                hookCount = hookCount + 1
-            end)
-        end
-    end
-end
-
-installHooks()
-
--- try to fetch manually if possible
-local function tryManualRefresh()
-    if eggRemote then
-        local ok, res = pcall(function() return eggRemote:InvokeServer() end)
-        if ok then
-            updateCacheFromResponse(res)
-        end
-    end
-end
-
--- ============================================================
-
-local function getServers()
-    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?limit=100"):format(PlaceId)
-    local ok, b = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
-    return ok and b and b.data or {}
-end
-
-local function findServer()
-    local servers = getServers()
-    local pool = {}
-    for _, s in ipairs(servers) do
-        if s.id ~= JobId and (s.playing or 0) < (s.maxPlayers or 50) then
-            local n = s.playing or 0
-            if n <= CONFIG.MaxPlayers then
-                table.insert(pool, s)
-            end
-        end
-    end
-    if #pool == 0 then
-        for _, s in ipairs(servers) do
-            if s.id ~= JobId and (s.playing or 0) < (s.maxPlayers or 50) then
-                return s.id
-            end
-        end
-        return nil
-    end
-    table.sort(pool, function(a, b) return (a.playing or 0) < (b.playing or 0) end)
-    return pool[1].id
-end
-
-local function setSize(set)
-    if type(set) ~= "table" then return 0 end
-    local n = 0
-    for _ in pairs(set) do n = n + 1 end
-    return n
-end
-
-local function getEggValue(egg)
-    if type(egg) ~= "table" then return 0 end
-    if type(egg.Value) == "number" and egg.Value > 0 then return egg.Value end
-    local rate = egg.EarningRate or egg.Rate or egg.Income or egg.Worth or 0
-    if type(rate) ~= "number" then return 0 end
-    local scale = egg.Scale or egg.Size or 1
-    if type(scale) ~= "number" then scale = 1 end
-    local v = rate * (scale ^ 1.85)
-    local muts = egg.Mutations or {}
-    if type(muts) == "table" then
-        for _, m in ipairs(muts) do
-            if type(m) == "table" then
-                v = v * (m.Multiplier or m.EarningMulti or 1)
-            end
-        end
-    end
-    return v
-end
-
-local function getEggName(egg)
-    if type(egg) ~= "table" then return "?" end
-    return egg.Name or egg.EggName or egg.PetName or tostring(egg.Id) or "?"
-end
-
-local function checkEggs()
-    local minMoney = parseMoney(CONFIG.MinMoneyText)
-    local hasEggFilter = setSize(CONFIG.SelectedEggs) > 0
-
-    if #cachedEggs == 0 then
-        tryManualRefresh()
-    end
-
-    if #cachedEggs == 0 then
-        return false, 0, nil, false, 0, "no-cache"
-    end
-
-    local bestV, bestE = 0, nil
-    local anySpawned = false
-    local matchCount = 0
-
-    for _, egg in ipairs(cachedEggs) do
-        local en = getEggName(egg)
-
-        local matched = not hasEggFilter
-        if hasEggFilter then
-            for target in pairs(CONFIG.SelectedEggs) do
-                if nameMatches(en, target) then
-                    matched = true
-                    break
-                end
-            end
-        end
-
-        if matched then
-            anySpawned = true
-            matchCount = matchCount + 1
-            local v = getEggValue(egg)
-            if v > bestV then
-                bestV = v
-                bestE = en
-            end
-        end
-    end
-
-    return bestV >= minMoney, bestV, bestE, anySpawned, matchCount, "ok"
-end
-
-local function doHop()
-    local t = findServer()
-    if t then
-        TeleportService:TeleportToPlaceInstance(PlaceId, t, LocalPlayer)
-    else
-        TeleportService:Teleport(PlaceId, LocalPlayer)
-    end
-end
-
-local function queueAutoExec()
-    if AUTO_EXEC_URL == "" then return end
-    local ok, src = pcall(game.HttpGet, game, AUTO_EXEC_URL)
-    if not ok or not src then return end
-    local f = queue_on_teleport or (syn and syn.queue_on_teleport)
-        or (fluxus and fluxus.queue_on_teleport) or (krnl and krnl.queue_on_teleport)
-    if f then pcall(f, src) end
-end
-
--- ============ UI ============
-
 local overlayGui = mk("ScreenGui", {
-    Name = "PrismOverlay",
-    ResetOnSpawn = false,
-    DisplayOrder = 999,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    IgnoreGuiInset = false,
+    Name = "PrismOverlay", ResetOnSpawn = false,
+    DisplayOrder = 999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, CoreGui)
 
 local closeActiveDropdown = nil
-local function closeDropdown()
-    if closeActiveDropdown then
-        closeActiveDropdown()
-        closeActiveDropdown = nil
-    end
-end
 
 local gui = mk("ScreenGui", {
     Name = "PrismUI", ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     DisplayOrder = 10,
-    IgnoreGuiInset = false,
 }, CoreGui)
 
-local W, H = 500, 560
+local W, H = 500, 540
 
 local main = mk("Frame", {
     Size = UDim2.fromOffset(W, H),
@@ -383,29 +415,24 @@ mk("Frame", {
     Position = UDim2.new(0, 0, 1, -24),
     BackgroundColor3 = C.Panel, BorderSizePixel = 0, ZIndex = 2,
 }, header)
-
-local ab = mk("Frame", {
+local ac = mk("Frame", {
     Size = UDim2.new(0, 4, 0, 32),
     Position = UDim2.new(0, 18, 0, 15),
     BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 3,
 }, header)
-crn(ab, 2)
+crn(ac, 2)
 
 mk("TextLabel", {
-    Text = "PRISM",
-    Font = Enum.Font.GothamBlack, TextSize = 20,
+    Text = "PRISM", Font = Enum.Font.GothamBlack, TextSize = 20,
     TextColor3 = C.Text, BackgroundTransparency = 1,
-    Position = UDim2.new(0, 32, 0, 12),
-    Size = UDim2.new(1, -140, 0, 24),
+    Position = UDim2.new(0, 32, 0, 12), Size = UDim2.new(1, -140, 0, 24),
     TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
 }, header)
 
 mk("TextLabel", {
-    Text = "Steal an Egg  ·  Auto Hop",
-    Font = Enum.Font.Gotham, TextSize = 11,
+    Text = "Steal an Egg  ·  Auto Hop", Font = Enum.Font.Gotham, TextSize = 11,
     TextColor3 = C.Sub, BackgroundTransparency = 1,
-    Position = UDim2.new(0, 32, 0, 36),
-    Size = UDim2.new(1, -140, 0, 16),
+    Position = UDim2.new(0, 32, 0, 36), Size = UDim2.new(1, -140, 0, 16),
     TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
 }, header)
 
@@ -416,11 +443,9 @@ local statusDot = mk("Frame", {
 }, header)
 crn(statusDot, 4)
 local statusLbl = mk("TextLabel", {
-    Text = "IDLE",
-    Font = Enum.Font.GothamBold, TextSize = 10,
+    Text = "IDLE", Font = Enum.Font.GothamBold, TextSize = 10,
     TextColor3 = C.Muted, BackgroundTransparency = 1,
-    Position = UDim2.new(1, -86, 0, 23),
-    Size = UDim2.fromOffset(60, 16),
+    Position = UDim2.new(1, -86, 0, 23), Size = UDim2.fromOffset(60, 16),
     TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
 }, header)
 
@@ -475,19 +500,14 @@ local content = mk("ScrollingFrame", {
     Size = UDim2.new(1, -24, 1, -86),
     Position = UDim2.new(0, 12, 0, 74),
     BackgroundTransparency = 1, BorderSizePixel = 0,
-    ScrollBarThickness = 4,
-    ScrollBarImageColor3 = C.Accent,
+    ScrollBarThickness = 4, ScrollBarImageColor3 = C.Accent,
     CanvasSize = UDim2.new(0, 0, 0, 0),
     AutomaticCanvasSize = Enum.AutomaticSize.Y,
     ScrollingDirection = Enum.ScrollingDirection.Y,
-    ClipsDescendants = true,
-    ZIndex = 2,
+    ClipsDescendants = true, ZIndex = 2,
 }, main)
 pad(content, 0, 6, 20, 0)
-mk("UIListLayout", {
-    Padding = UDim.new(0, 12),
-    SortOrder = Enum.SortOrder.LayoutOrder,
-}, content)
+mk("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }, content)
 
 local minimized = false
 minBtn.MouseButton1Click:Connect(function()
@@ -505,17 +525,12 @@ local dragging, ds, sp
 header.InputBegan:Connect(function(inp)
     if inp.UserInputType == Enum.UserInputType.MouseButton1
         or inp.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        ds = inp.Position
-        sp = main.Position
-        closeDropdown()
+        dragging = true ds = inp.Position sp = main.Position
     end
 end)
 header.InputEnded:Connect(function(inp)
     if inp.UserInputType == Enum.UserInputType.MouseButton1
-        or inp.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
+        or inp.UserInputType == Enum.UserInputType.Touch then dragging = false end
 end)
 UserInputService.InputChanged:Connect(function(inp)
     if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
@@ -527,91 +542,69 @@ end)
 
 local function makeSection(name)
     local sf = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 0),
-        BackgroundColor3 = C.Panel, BorderSizePixel = 0,
-        AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 3,
+        Size = UDim2.new(1, 0, 0, 0), BackgroundColor3 = C.Panel,
+        BorderSizePixel = 0, AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 3,
     }, content)
     crn(sf, 14)
     pad(sf, 14)
     strk(sf, C.BorderSoft, 1, 0.2)
-    mk("UIListLayout", {
-        Padding = UDim.new(0, 8),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, sf)
-
+    mk("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, sf)
     if name and name ~= "" then
         local hRow = mk("Frame", {
-            Size = UDim2.new(1, 0, 0, 22),
-            BackgroundTransparency = 1, ZIndex = 4,
+            Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, ZIndex = 4,
         }, sf)
         local dot = mk("Frame", {
-            Size = UDim2.fromOffset(6, 6),
-            Position = UDim2.new(0, 0, 0.5, -3),
+            Size = UDim2.fromOffset(6, 6), Position = UDim2.new(0, 0, 0.5, -3),
             BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 5,
         }, hRow)
         crn(dot, 3)
         mk("TextLabel", {
-            Text = string.upper(name),
-            Font = Enum.Font.GothamBold, TextSize = 11,
+            Text = string.upper(name), Font = Enum.Font.GothamBold, TextSize = 11,
             TextColor3 = C.Sub, BackgroundTransparency = 1,
-            Position = UDim2.new(0, 16, 0, 0),
-            Size = UDim2.new(1, -16, 1, 0),
+            Position = UDim2.new(0, 16, 0, 0), Size = UDim2.new(1, -16, 1, 0),
             TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
         }, hRow)
     end
-
     return sf
 end
 
 local function addToggle(parent, o)
     local on = o.Default or false
     local f = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 44),
-        BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
+        Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = C.Element,
+        BorderSizePixel = 0, ZIndex = 4,
     }, parent)
     crn(f, 10)
-
     mk("TextLabel", {
         Text = o.Title or "Toggle", Font = Enum.Font.GothamMedium,
         TextSize = 13, TextColor3 = C.Text, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 0),
-        Size = UDim2.new(1, -80, 1, 0),
+        Position = UDim2.new(0, 16, 0, 0), Size = UDim2.new(1, -80, 1, 0),
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
     }, f)
-
     local tk = mk("Frame", {
-        Size = UDim2.fromOffset(42, 24),
-        Position = UDim2.new(1, -58, 0.5, -12),
-        BackgroundColor3 = on and C.Accent or C.Bg,
-        BorderSizePixel = 0, ZIndex = 5,
+        Size = UDim2.fromOffset(42, 24), Position = UDim2.new(1, -58, 0.5, -12),
+        BackgroundColor3 = on and C.Accent or C.Bg, BorderSizePixel = 0, ZIndex = 5,
     }, f)
     crn(tk, 12)
-
     local kn = mk("Frame", {
         Size = UDim2.fromOffset(18, 18),
         Position = on and UDim2.new(1, -21, 0.5, -9) or UDim2.new(0, 3, 0.5, -9),
-        BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-        BorderSizePixel = 0, ZIndex = 6,
+        BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0, ZIndex = 6,
     }, tk)
     crn(kn, 9)
-
     local btn = mk("TextButton", {
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1, Text = "", ZIndex = 7,
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 7,
     }, f)
-
     local function apply()
-        TweenService:Create(tk, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {
+        TweenService:Create(tk, TweenInfo.new(0.22), {
             BackgroundColor3 = on and C.Accent or C.Bg,
         }):Play()
-        TweenService:Create(kn, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {
+        TweenService:Create(kn, TweenInfo.new(0.22), {
             Position = on and UDim2.new(1, -21, 0.5, -9) or UDim2.new(0, 3, 0.5, -9),
         }):Play()
     end
-
     btn.MouseButton1Click:Connect(function()
-        on = not on
-        apply()
+        on = not on apply()
         if o.Callback then o.Callback(on) end
         saveConfig()
     end)
@@ -621,37 +614,27 @@ local function addToggle(parent, o)
     btn.MouseLeave:Connect(function()
         TweenService:Create(f, TweenInfo.new(0.15), { BackgroundColor3 = C.Element }):Play()
     end)
-
     return { Set = function(v) on = v apply() end, Get = function() return on end }
 end
 
 local function addButton(parent, o)
     local accent = o.Accent or false
     local b = mk("TextButton", {
-        Text = o.Title or "Button", Font = Enum.Font.GothamBold,
-        TextSize = 13,
-        TextColor3 = C.Text,
-        BackgroundColor3 = accent and C.Accent or C.Element,
+        Text = o.Title or "Button", Font = Enum.Font.GothamBold, TextSize = 13,
+        TextColor3 = C.Text, BackgroundColor3 = accent and C.Accent or C.Element,
         BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 44),
         AutoButtonColor = false, ZIndex = 4,
     }, parent)
     crn(b, 10)
-
     b.MouseEnter:Connect(function()
-        if accent then
-            TweenService:Create(b, TweenInfo.new(0.15), {
-                BackgroundColor3 = Color3.fromRGB(255, 70, 95),
-            }):Play()
-        else
-            TweenService:Create(b, TweenInfo.new(0.15), { BackgroundColor3 = C.Hover }):Play()
-        end
+        TweenService:Create(b, TweenInfo.new(0.15), {
+            BackgroundColor3 = accent and Color3.fromRGB(255, 70, 95) or C.Hover,
+        }):Play()
     end)
     b.MouseLeave:Connect(function()
-        if accent then
-            TweenService:Create(b, TweenInfo.new(0.15), { BackgroundColor3 = C.Accent }):Play()
-        else
-            TweenService:Create(b, TweenInfo.new(0.15), { BackgroundColor3 = C.Element }):Play()
-        end
+        TweenService:Create(b, TweenInfo.new(0.15), {
+            BackgroundColor3 = accent and C.Accent or C.Element,
+        }):Play()
     end)
     b.MouseButton1Click:Connect(function()
         if o.Callback then o.Callback() end
@@ -661,24 +644,19 @@ end
 
 local function addMoneyInput(parent, o)
     local c = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 92),
-        BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
+        Size = UDim2.new(1, 0, 0, 92), BackgroundColor3 = C.Element,
+        BorderSizePixel = 0, ZIndex = 4,
     }, parent)
     crn(c, 10)
-
     mk("TextLabel", {
         Text = o.Title or "Min Money ($/s)", Font = Enum.Font.GothamMedium,
         TextSize = 12, TextColor3 = C.Sub, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 10),
-        Size = UDim2.new(1, -32, 0, 16),
+        Position = UDim2.new(0, 16, 0, 10), Size = UDim2.new(1, -32, 0, 16),
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
     }, c)
-
     local box = mk("TextBox", {
-        Text = o.Default or "",
-        PlaceholderText = o.Placeholder or "",
-        PlaceholderColor3 = C.Muted,
-        Font = Enum.Font.Code, TextSize = 17,
+        Text = o.Default or "", PlaceholderText = o.Placeholder or "",
+        PlaceholderColor3 = C.Muted, Font = Enum.Font.Code, TextSize = 17,
         TextColor3 = C.Number, BackgroundColor3 = C.Bg,
         BorderSizePixel = 0, Size = UDim2.new(1, -32, 0, 34),
         Position = UDim2.new(0, 16, 0, 30),
@@ -688,49 +666,29 @@ local function addMoneyInput(parent, o)
     crn(box, 8)
     pad(box, 0, 12, 0, 12)
     local st = strk(box, C.Border, 1, 0.3)
-
     local preview = mk("TextLabel", {
-        Text = "",
-        Font = Enum.Font.Code, TextSize = 12,
-        TextColor3 = C.NumberDim, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 68),
-        Size = UDim2.new(1, -32, 0, 16),
+        Text = "", Font = Enum.Font.Code, TextSize = 12,
+        TextColor3 = C.Number, BackgroundTransparency = 1,
+        Position = UDim2.new(0, 16, 0, 68), Size = UDim2.new(1, -32, 0, 16),
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
     }, c)
-
     local function updPreview()
         local n = parseMoney(box.Text)
-        if n > 0 then
-            preview.Text = "≈ " .. formatMoney(n) .. "  per second"
-            preview.TextColor3 = C.NumberDim
-        else
-            preview.Text = "enter a value like 1B, 100M, 5000000"
-            preview.TextColor3 = C.Muted
-        end
+        if n > 0 then preview.Text = "≈ " .. formatMoney(n) .. "  per second"
+        else preview.Text = "enter 1B, 100M, 5000000" end
     end
     updPreview()
-
     box:GetPropertyChangedSignal("Text"):Connect(updPreview)
-
     box.Focused:Connect(function()
-        st.Color = C.Accent
-        st.Transparency = 0
-        TweenService:Create(box, TweenInfo.new(0.15), { BackgroundColor3 = C.Card }):Play()
+        st.Color = C.Accent st.Transparency = 0
     end)
     box.FocusLost:Connect(function()
-        st.Color = C.Border
-        st.Transparency = 0.3
-        TweenService:Create(box, TweenInfo.new(0.15), { BackgroundColor3 = C.Bg }):Play()
+        st.Color = C.Border st.Transparency = 0.3
         CONFIG.MinMoneyText = box.Text
         updPreview()
-        if o.Callback then o.Callback(box.Text) end
         saveConfig()
     end)
-
-    return {
-        Set = function(v) box.Text = v updPreview() end,
-        Get = function() return box.Text end,
-    }
+    return { Set = function(v) box.Text = v updPreview() end, Get = function() return box.Text end }
 end
 
 local function addSlider(parent, o)
@@ -739,57 +697,44 @@ local function addSlider(parent, o)
     local def = o.Default or min
     local step = o.Step or 1
     local val = def
-
     local c = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 64),
-        BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
+        Size = UDim2.new(1, 0, 0, 64), BackgroundColor3 = C.Element,
+        BorderSizePixel = 0, ZIndex = 4,
     }, parent)
     crn(c, 10)
-
     mk("TextLabel", {
         Text = o.Title or "Slider", Font = Enum.Font.GothamMedium,
         TextSize = 12, TextColor3 = C.Sub, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 10),
-        Size = UDim2.new(0.7, 0, 0, 16),
+        Position = UDim2.new(0, 16, 0, 10), Size = UDim2.new(0.7, 0, 0, 16),
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
     }, c)
-
     local vLbl = mk("TextLabel", {
-        Text = tostring(val), Font = Enum.Font.Code,
-        TextSize = 17, TextColor3 = C.Number, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 0, 0, 6),
-        Size = UDim2.new(1, -16, 0, 22),
+        Text = tostring(val), Font = Enum.Font.Code, TextSize = 17,
+        TextColor3 = C.Number, BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 0, 6), Size = UDim2.new(1, -16, 0, 22),
         TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 5,
     }, c)
-
     local track = mk("Frame", {
-        Size = UDim2.new(1, -32, 0, 6),
-        Position = UDim2.new(0, 16, 0, 40),
+        Size = UDim2.new(1, -32, 0, 6), Position = UDim2.new(0, 16, 0, 40),
         BackgroundColor3 = C.Bg, BorderSizePixel = 0, ZIndex = 5,
     }, c)
     crn(track, 3)
-
     local fill = mk("Frame", {
         Size = UDim2.new((val - min) / (max - min), 0, 1, 0),
         BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 6,
     }, track)
     crn(fill, 3)
-
     local kn = mk("Frame", {
         Size = UDim2.fromOffset(16, 16),
         Position = UDim2.new((val - min) / (max - min), -8, 0.5, -8),
-        BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-        BorderSizePixel = 0, ZIndex = 7,
+        BackgroundColor3 = Color3.fromRGB(255, 255, 255), BorderSizePixel = 0, ZIndex = 7,
     }, track)
     crn(kn, 8)
     strk(kn, C.Accent, 2, 0)
-
     local hit = mk("TextButton", {
-        Size = UDim2.new(1, 0, 0, 28),
-        Position = UDim2.new(0, 0, 0, 30),
+        Size = UDim2.new(1, 0, 0, 28), Position = UDim2.new(0, 0, 0, 30),
         BackgroundTransparency = 1, Text = "", ZIndex = 8,
     }, c)
-
     local drag = false
     local function upd(x)
         local a = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
@@ -801,12 +746,10 @@ local function addSlider(parent, o)
         kn.Position = UDim2.new(al, -8, 0.5, -8)
         vLbl.Text = tostring(val)
     end
-
     hit.InputBegan:Connect(function(inp)
         if inp.UserInputType == Enum.UserInputType.MouseButton1
             or inp.UserInputType == Enum.UserInputType.Touch then
-            drag = true
-            upd(inp.Position.X)
+            drag = true upd(inp.Position.X)
         end
     end)
     UserInputService.InputChanged:Connect(function(inp)
@@ -823,17 +766,7 @@ local function addSlider(parent, o)
             saveConfig()
         end
     end)
-
-    return {
-        Set = function(v)
-            val = math.clamp(v, min, max)
-            local al = (val - min) / (max - min)
-            fill.Size = UDim2.new(al, 0, 1, 0)
-            kn.Position = UDim2.new(al, -8, 0.5, -8)
-            vLbl.Text = tostring(val)
-        end,
-        Get = function() return val end,
-    }
+    return { Set = function(v) val = math.clamp(v, min, max) end, Get = function() return val end }
 end
 
 local function addDropdown(parent, o)
@@ -842,40 +775,28 @@ local function addDropdown(parent, o)
     if type(sel) ~= "table" then sel = {} end
     local converted = {}
     for k, v in pairs(sel) do
-        if type(k) == "number" then
-            converted[v] = true
-        else
-            converted[k] = v
-        end
+        if type(k) == "number" then converted[v] = true else converted[k] = v end
     end
     sel = converted
-
     local c = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 48),
-        BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
+        Size = UDim2.new(1, 0, 0, 48), BackgroundColor3 = C.Element,
+        BorderSizePixel = 0, ZIndex = 4,
     }, parent)
     crn(c, 10)
-
     local lbl = mk("TextLabel", {
-        Text = o.Title or "Dropdown", Font = Enum.Font.GothamMedium,
-        TextSize = 13, TextColor3 = C.Sub, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 16, 0, 0),
-        Size = UDim2.new(1, -70, 1, 0),
+        Text = o.Title or "Dropdown", Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = C.Sub, BackgroundTransparency = 1,
+        Position = UDim2.new(0, 16, 0, 0), Size = UDim2.new(1, -70, 1, 0),
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
     }, c)
-
     local arw = mk("TextLabel", {
         Text = "▾", Font = Enum.Font.GothamBold, TextSize = 15,
         TextColor3 = C.Sub, BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(20, 20),
-        Position = UDim2.new(1, -36, 0.5, -10), ZIndex = 5,
+        Size = UDim2.fromOffset(20, 20), Position = UDim2.new(1, -36, 0.5, -10), ZIndex = 5,
     }, c)
-
     local badge = mk("Frame", {
-        Size = UDim2.fromOffset(24, 20),
-        Position = UDim2.new(1, -64, 0.5, -10),
-        BackgroundColor3 = C.Accent, BorderSizePixel = 0,
-        Visible = false, ZIndex = 5,
+        Size = UDim2.fromOffset(24, 20), Position = UDim2.new(1, -64, 0.5, -10),
+        BackgroundColor3 = C.Accent, BorderSizePixel = 0, Visible = false, ZIndex = 5,
     }, c)
     crn(badge, 10)
     local badgeLbl = mk("TextLabel", {
@@ -883,7 +804,6 @@ local function addDropdown(parent, o)
         TextColor3 = C.Text, BackgroundTransparency = 1,
         Size = UDim2.fromScale(1, 1), ZIndex = 6,
     }, badge)
-
     local function refreshLbl()
         local n = setSize(sel)
         if n == 0 then
@@ -899,47 +819,34 @@ local function addDropdown(parent, o)
             badge.Position = UDim2.new(1, -22 - badge.Size.X.Offset, 0.5, -10)
         end
     end
-
     local function openList()
-        closeDropdown()
-
+        if closeActiveDropdown then closeActiveDropdown() end
         local bgClose = mk("TextButton", {
-            Size = UDim2.fromScale(1, 1),
-            BackgroundTransparency = 1,
-            Text = "",
-            ZIndex = 0,
+            Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+            Text = "", ZIndex = 0,
         }, overlayGui)
-
         local lh = math.min(#values * 32 + 12, 240)
         local posX = c.AbsolutePosition.X
         local posY = c.AbsolutePosition.Y + c.AbsoluteSize.Y + 6
-
         if posY + lh > workspace.CurrentCamera.ViewportSize.Y then
             posY = c.AbsolutePosition.Y - lh - 6
         end
-
         local list = mk("Frame", {
             Size = UDim2.fromOffset(c.AbsoluteSize.X, lh),
             Position = UDim2.fromOffset(posX, posY),
-            BackgroundColor3 = C.Panel,
-            BorderSizePixel = 0,
-            ZIndex = 2,
+            BackgroundColor3 = C.Panel, BorderSizePixel = 0, ZIndex = 2,
         }, overlayGui)
         crn(list, 12)
         strk(list, C.Border, 1)
         pad(list, 6)
-
         local scroll = mk("ScrollingFrame", {
-            Size = UDim2.fromScale(1, 1),
-            BackgroundTransparency = 1, BorderSizePixel = 0,
-            ScrollBarThickness = 3,
+            Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+            BorderSizePixel = 0, ScrollBarThickness = 3,
             ScrollBarImageColor3 = C.Accent,
             CanvasSize = UDim2.new(0, 0, 0, 0),
-            AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            ZIndex = 3,
+            AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 3,
         }, list)
         mk("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
-
         for _, v in ipairs(values) do
             local it = mk("TextButton", {
                 Text = "", BackgroundColor3 = sel[v] and C.Hover or C.Element,
@@ -947,16 +854,13 @@ local function addDropdown(parent, o)
                 AutoButtonColor = false, ZIndex = 4,
             }, scroll)
             crn(it, 7)
-
             local iLbl = mk("TextLabel", {
-                Text = tostring(v), Font = Enum.Font.GothamMedium,
-                TextSize = 12, TextColor3 = sel[v] and C.Accent or C.Text,
+                Text = tostring(v), Font = Enum.Font.GothamMedium, TextSize = 12,
+                TextColor3 = sel[v] and C.Accent or C.Text,
                 BackgroundTransparency = 1,
-                Position = UDim2.new(0, 14, 0, 0),
-                Size = UDim2.new(1, -28, 1, 0),
+                Position = UDim2.new(0, 14, 0, 0), Size = UDim2.new(1, -28, 1, 0),
                 TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
             }, it)
-
             it.MouseEnter:Connect(function()
                 TweenService:Create(it, TweenInfo.new(0.1), { BackgroundColor3 = C.Hover }):Play()
             end)
@@ -965,44 +869,31 @@ local function addDropdown(parent, o)
                     BackgroundColor3 = sel[v] and C.Hover or C.Element,
                 }):Play()
             end)
-
             it.MouseButton1Click:Connect(function()
                 if sel[v] then
-                    sel[v] = nil
-                    iLbl.TextColor3 = C.Text
-                    it.BackgroundColor3 = C.Element
+                    sel[v] = nil iLbl.TextColor3 = C.Text it.BackgroundColor3 = C.Element
                 else
-                    sel[v] = true
-                    iLbl.TextColor3 = C.Accent
-                    it.BackgroundColor3 = C.Hover
+                    sel[v] = true iLbl.TextColor3 = C.Accent it.BackgroundColor3 = C.Hover
                 end
                 refreshLbl()
                 if o.Callback then o.Callback(sel) end
                 saveConfig()
             end)
         end
-
         local function closeList()
             if bgClose then bgClose:Destroy() end
             if list then list:Destroy() end
         end
-
         bgClose.MouseButton1Click:Connect(closeList)
         closeActiveDropdown = closeList
     end
-
     refreshLbl()
-
     local btn = mk("TextButton", {
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1, Text = "", ZIndex = 6,
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        Text = "", ZIndex = 6,
     }, c)
     btn.MouseButton1Click:Connect(function()
-        if closeActiveDropdown then
-            closeDropdown()
-        else
-            openList()
-        end
+        if closeActiveDropdown then closeActiveDropdown() else openList() end
     end)
     btn.MouseEnter:Connect(function()
         TweenService:Create(c, TweenInfo.new(0.15), { BackgroundColor3 = C.Hover }):Play()
@@ -1010,120 +901,105 @@ local function addDropdown(parent, o)
     btn.MouseLeave:Connect(function()
         TweenService:Create(c, TweenInfo.new(0.15), { BackgroundColor3 = C.Element }):Play()
     end)
-
-    return {
-        Set = function(v)
-            sel = {}
-            if type(v) == "table" then
-                for k, vv in pairs(v) do
-                    if type(k) == "number" then sel[vv] = true else sel[k] = vv end
-                end
+    return { Set = function(v)
+        sel = {}
+        if type(v) == "table" then
+            for k, vv in pairs(v) do
+                if type(k) == "number" then sel[vv] = true else sel[k] = vv end
             end
-            refreshLbl()
-        end,
-        Get = function() return sel end,
-    }
+        end
+        refreshLbl()
+    end, Get = function() return sel end }
 end
 
 local notifBox = mk("Frame", {
-    Size = UDim2.new(0, 300, 1, -20),
-    Position = UDim2.new(1, -310, 0, 10),
+    Size = UDim2.new(0, 320, 1, -20), Position = UDim2.new(1, -330, 0, 10),
     BackgroundTransparency = 1, ZIndex = 100,
 }, gui)
 mk("UIListLayout", {
-    Padding = UDim.new(0, 8),
-    SortOrder = Enum.SortOrder.LayoutOrder,
+    Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
     VerticalAlignment = Enum.VerticalAlignment.Top,
     HorizontalAlignment = Enum.HorizontalAlignment.Right,
 }, notifBox)
 
 local function notify(o)
     local n = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 0),
-        BackgroundColor3 = C.Panel, BorderSizePixel = 0,
-        AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 101,
+        Size = UDim2.new(1, 0, 0, 0), BackgroundColor3 = C.Panel,
+        BorderSizePixel = 0, AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 101,
     }, notifBox)
     crn(n, 12)
     strk(n, C.Border, 1)
     pad(n, 12, 16, 12, 18)
-
-    local ac = mk("Frame", {
-        Size = UDim2.new(0, 3, 1, -18),
-        Position = UDim2.new(0, -11, 0, 9),
+    local ac2 = mk("Frame", {
+        Size = UDim2.new(0, 3, 1, -18), Position = UDim2.new(0, -11, 0, 9),
         BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 102,
     }, n)
-    crn(ac, 2)
-
+    crn(ac2, 2)
     local t = mk("TextLabel", {
-        Text = o.Title or "Notification", Font = Enum.Font.GothamBold,
-        TextSize = 12, TextColor3 = C.Text, BackgroundTransparency = 1,
-        Size = UDim2.new(1, 0, 0, 16),
-        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 102,
+        Text = o.Title or "Notification", Font = Enum.Font.GothamBold, TextSize = 12,
+        TextColor3 = C.Text, BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 102,
     }, n)
-
     local ct = mk("TextLabel", {
-        Text = o.Content or "", Font = Enum.Font.Gotham, TextSize = 11,
+        Text = o.Content or "", Font = Enum.Font.Code, TextSize = 11,
         TextColor3 = C.Sub, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 0, 0, 18),
-        Size = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.new(0, 0, 0, 18), Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, TextXAlignment = Enum.TextXAlignment.Left,
         TextWrapped = true, ZIndex = 102,
     }, n)
-
-    task.delay(o.Duration or 4, function()
+    task.delay(o.Duration or 5, function()
         TweenService:Create(n, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
         TweenService:Create(t, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
         TweenService:Create(ct, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
-        TweenService:Create(ac, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
         task.wait(0.3)
         n:Destroy()
     end)
 end
 
--- ============ Build UI ============
-
 local SecActions = makeSection("Actions")
 addToggle(SecActions, {
     Title = "Auto Hop Server",
     Default = CONFIG.AutoHopServer,
-    Callback = function(v)
-        CONFIG.AutoHopServer = v
-        setStatus(v and "waiting" or "idle")
-    end,
+    Callback = function(v) CONFIG.AutoHopServer = v setStatus(v and "waiting" or "idle") end,
 })
 addToggle(SecActions, {
     Title = "Auto Exec on Rejoin",
     Default = CONFIG.AutoExec,
-    Callback = function(v)
-        CONFIG.AutoExec = v
-        if v then queueAutoExec() end
-    end,
+    Callback = function(v) CONFIG.AutoExec = v if v then queueAutoExec() end end,
 })
 addButton(SecActions, {
-    Title = "Hop Now",
-    Accent = true,
-    Callback = function()
-        notify({ Title = "Hop", Content = "Teleporting to a new server...", Duration = 3 })
-        doHop()
-    end,
+    Title = "Hop Now", Accent = true,
+    Callback = function() notify({ Title = "Hop", Content = "Teleporting...", Duration = 3 }) doHop() end,
 })
 addButton(SecActions, {
-    Title = "Show Cache (Debug)",
+    Title = "Dump First Egg (Debug)",
     Callback = function()
+        if #cachedEggs == 0 then refreshSnapshot() end
         if #cachedEggs == 0 then
-            notify({ Title = "Cache vazio", Content = "Rode o ESP para popular os dados.", Duration = 6 })
+            notify({ Title = "Cache vazio", Content = "Sem dados. Rode o ESP.", Duration = 6 })
             return
         end
-        local show = {}
-        for i = 1, math.min(5, #cachedEggs) do
-            local egg = cachedEggs[i]
-            table.insert(show, getEggName(egg) .. " = " .. formatMoney(getEggValue(egg)))
+        local egg = cachedEggs[1]
+        local lines = {}
+        for k, v in pairs(egg) do
+            if type(v) ~= "table" then
+                table.insert(lines, tostring(k) .. " = " .. tostring(v))
+            else
+                table.insert(lines, tostring(k) .. " = [table]")
+            end
         end
+        notify({ Title = "First egg fields", Content = table.concat(lines, "\n"), Duration = 15 })
+    end,
+})
+addButton(SecActions, {
+    Title = "Cache Count",
+    Callback = function()
+        if #cachedEggs == 0 then refreshSnapshot() end
         notify({
-            Title = "Cache · " .. #cachedEggs .. " ovos",
-            Content = table.concat(show, "\n"),
-            Duration = 10,
+            Title = "Cache",
+            Content = #cachedEggs .. " eggs · " .. hookCount .. " hooks\n" ..
+                (Assets and "Assets OK" or "Assets MISSING"),
+            Duration = 6,
         })
     end,
 })
@@ -1146,49 +1022,38 @@ addDropdown(SecFilter, {
     Values = ALL_EGGS, Value = CONFIG.SelectedEggs,
     Callback = function(v) CONFIG.SelectedEggs = v end,
 })
-addDropdown(SecFilter, {
-    Title = "Rarities",
-    Values = ALL_RARITIES, Value = CONFIG.SelectedRarities,
-    Callback = function(v) CONFIG.SelectedRarities = v end,
-})
-addDropdown(SecFilter, {
-    Title = "Mutations",
-    Values = ALL_MUTATIONS, Value = CONFIG.SelectedMutations,
-    Callback = function(v) CONFIG.SelectedMutations = v end,
-})
-addDropdown(SecFilter, {
-    Title = "Areas",
-    Values = ALL_AREAS, Value = CONFIG.SelectedAreas,
-    Callback = function(v) CONFIG.SelectedAreas = v end,
-})
 
 setStatus(CONFIG.AutoHopServer and "waiting" or "idle")
 
 LocalPlayer.CharacterAdded:Connect(function()
-    if CONFIG.AutoExec then
-        task.wait(2)
-        queueAutoExec()
-    end
+    if CONFIG.AutoExec then task.wait(2) queueAutoExec() end
 end)
-
 LocalPlayer.OnTeleport:Connect(function()
     if CONFIG.AutoExec then queueAutoExec() end
 end)
 
-local lastState = nil
-RunService.Heartbeat:Connect(function()
-    if not CONFIG.AutoHopServer then
-        lastState = nil
-        return
+task.spawn(function()
+    while task.wait(2) do
+        if #cachedEggs == 0 then
+            pcall(refreshSnapshot)
+        end
     end
+end)
+
+local lastCheck = 0
+local lastState = nil
+
+RunService.Heartbeat:Connect(function()
+    if not CONFIG.AutoHopServer then lastState = nil return end
+
+    local now = tick()
+    if now - lastCheck < 0.5 then return end
+    lastCheck = now
 
     local enough, bestV, eggName, anySpawned, matchCount, status = checkEggs()
 
     if status == "no-cache" then
-        if lastState ~= "nocache" then
-            lastState = "nocache"
-            setStatus("waiting")
-        end
+        if lastState ~= "nocache" then lastState = "nocache" setStatus("waiting") end
         return
     end
 
@@ -1196,38 +1061,27 @@ RunService.Heartbeat:Connect(function()
         if lastState ~= "stay" then
             lastState = "stay"
             setStatus("active")
-            notify({
-                Title = "Target Found",
-                Content = (eggName or "?") .. "\n" .. formatMoney(bestV) .. " $/s",
-                Duration = 5,
-            })
+            notify({ Title = "Target Found", Content = (eggName or "?") .. "\n" .. formatMoney(bestV) .. " $/s", Duration = 5 })
         end
     elseif anySpawned then
         if lastState ~= "hop" then
             lastState = "hop"
             setStatus("waiting")
-            notify({
-                Title = "Hopping · " .. matchCount .. " matched",
-                Content = (eggName or "?") .. " · " .. formatMoney(bestV) .. " $/s",
-                Duration = 4,
-            })
+            notify({ Title = "Hopping", Content = (eggName or "?") .. " · " .. formatMoney(bestV) .. " $/s", Duration = 4 })
             doHop()
         end
     else
-        if lastState ~= "wait" then
-            lastState = "wait"
-            setStatus("waiting")
-        end
+        if lastState ~= "wait" then lastState = "wait" setStatus("waiting") end
     end
 end)
 
 task.spawn(function()
-    task.wait(3)
+    task.wait(2)
+    refreshSnapshot()
     notify({
-        Title = "Interceptor ativo",
-        Content = hookCount .. " remotes hookados. Rode o ESP para capturar valores.",
-        Duration = 6,
+        Title = "PRISM",
+        Content = hookCount .. " hooks · " .. #cachedEggs .. " eggs · " ..
+            (Assets and "Assets OK" or "Assets MISSING"),
+        Duration = 8,
     })
 end)
-
-notify({ Title = "PRISM", Content = "Auto Hop ready.", Duration = 4 })
