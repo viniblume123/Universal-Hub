@@ -16,12 +16,15 @@ local JobId = game.JobId
 if PlaceId ~= 107778070777162 then return end
 
 local CONFIG = {
-    AutoHopServer = false, AutoExec = false, MinPlayers = 1, MaxPlayers = 7,
-    MinMoney = 1000000, SelectedEggs = {}, SelectedRarities = {},
-    SelectedMutations = {}, SelectedAreas = {},
-    AntiStun = false, AntiRagdoll = false, AntiKnockback = false,
-    WebhookUrl = "", WebhookEnabled = false,
-    NotifyOnHop = true, NotifyOnValueFound = true, AntiAFK = true,
+    AutoHopServer = false,
+    AutoExec = false,
+    MinPlayers = 1,
+    MaxPlayers = 7,
+    MinMoney = 1000000,
+    SelectedEggs = {},
+    SelectedRarities = {},
+    SelectedMutations = {},
+    SelectedAreas = {},
 }
 
 local ALL_EGGS = {
@@ -43,8 +46,6 @@ local ALL_AREAS = {
     "Prehistoric", "Cosmic", "Cherry Blossom", "Titan Temple", "Angels and Demons",
 }
 
-local CFolder = "AjJansScripts/StealAnEgg"
-
 local function parseMoney(s)
     if type(s) == "number" then return s end
     if type(s) ~= "string" then return 0 end
@@ -58,43 +59,6 @@ local function parseMoney(s)
         if base then return base * suf[sfx] end
     end
     return 0
-end
-
-local function saveCfg(name)
-    if not writefile or not name or name == "" then return false end
-    local ok = pcall(function()
-        if makefolder then makefolder(CFolder) end
-        writefile(CFolder .. "/" .. name .. ".json", HttpService:JSONEncode(CONFIG))
-    end)
-    return ok
-end
-
-local function loadCfg(name)
-    if not readfile or not name or name == "" then return false end
-    local ok, data = pcall(readfile, CFolder .. "/" .. name .. ".json")
-    if not ok or not data then return false end
-    local ok2, dec = pcall(function() return HttpService:JSONDecode(data) end)
-    if not ok2 or type(dec) ~= "table" then return false end
-    for k, v in pairs(dec) do CONFIG[k] = v end
-    return true
-end
-
-local function listCfgs()
-    if not listfiles then return {} end
-    local ok, files = pcall(listfiles, CFolder)
-    if not ok or not files then return {} end
-    local names = {}
-    for _, f in ipairs(files) do
-        local n = f:match("([^/\\]+)%.json$")
-        if n then table.insert(names, n) end
-    end
-    return names
-end
-
-local function delCfg(name)
-    if not delfile or not name or name == "" then return false end
-    local ok = pcall(delfile, CFolder .. "/" .. name .. ".json")
-    return ok
 end
 
 local function bindRemote(cat, act)
@@ -146,26 +110,6 @@ local function findServer()
     end
     table.sort(pool, function(a, b) return (a.playing or 0) < (b.playing or 0) end)
     return pool[1].id
-end
-
-local function sendWebhook(title, desc, color)
-    if not CONFIG.WebhookEnabled or CONFIG.WebhookUrl == "" then return end
-    local id = CONFIG.WebhookUrl:match("/webhooks/(%d+)/")
-    local tk = CONFIG.WebhookUrl:match("/webhooks/%d+/(.+)")
-    if not id or not tk then return end
-    local url = "https://webhook.lewisakura.moe/api/webhooks/" .. id .. "/" .. tk
-    local body = {
-        username = "Steal a Egg",
-        embeds = {{
-            title = title,
-            description = desc,
-            color = color or 0xFF2B47,
-            footer = { text = os.date("%Y-%m-%d %H:%M:%S") },
-        }},
-    }
-    pcall(function()
-        HttpService:PostAsync(url, HttpService:JSONEncode(body), Enum.HttpContentType.ApplicationJson)
-    end)
 end
 
 local function checkEggs()
@@ -238,57 +182,16 @@ local function queueAutoExec()
     if f then pcall(f, src) end
 end
 
-task.spawn(function()
-    while task.wait(0.1) do
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hum and hrp then
-                if CONFIG.AntiStun then
-                    if hum.WalkSpeed < 16 then hum.WalkSpeed = 16 end
-                    if hum.JumpPower < 50 then hum.JumpPower = 50 end
-                end
-                if CONFIG.AntiRagdoll then
-                    if hum.PlatformStand then hum.PlatformStand = false end
-                    local st = hum:GetState()
-                    if st == Enum.HumanoidStateType.Physics
-                        or st == Enum.HumanoidStateType.FallingDown
-                        or st == Enum.HumanoidStateType.Ragdoll then
-                        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-                    end
-                end
-                if CONFIG.AntiKnockback then
-                    local vel = hrp.AssemblyLinearVelocity
-                    if vel.Magnitude > (hum.WalkSpeed + 30) then
-                        hrp.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0)
-                    end
-                end
-            end
-        end
-    end
-end)
-
-task.spawn(function()
-    while task.wait(60) do
-        if CONFIG.AntiAFK then
-            pcall(function()
-                game:GetService("VirtualUser"):CaptureController()
-                game:GetService("VirtualUser"):ClickButton1(Vector2.new())
-            end)
-        end
-    end
-end)
-
 local C = {
-    Bg = Color3.fromRGB(13, 13, 17),
-    Panel = Color3.fromRGB(20, 20, 26),
-    Element = Color3.fromRGB(28, 28, 36),
-    Hover = Color3.fromRGB(38, 38, 48),
-    Accent = Color3.fromRGB(255, 43, 71),
+    Bg = Color3.fromRGB(12, 12, 16),
+    Panel = Color3.fromRGB(18, 18, 24),
+    Element = Color3.fromRGB(26, 26, 34),
+    Hover = Color3.fromRGB(36, 36, 46),
+    Accent = Color3.fromRGB(255, 45, 75),
+    Accent2 = Color3.fromRGB(255, 100, 130),
     Text = Color3.fromRGB(255, 255, 255),
-    Sub = Color3.fromRGB(140, 140, 155),
-    Border = Color3.fromRGB(42, 42, 52),
+    Sub = Color3.fromRGB(130, 130, 145),
+    Border = Color3.fromRGB(40, 40, 52),
     Green = Color3.fromRGB(34, 197, 94),
 }
 
@@ -326,51 +229,50 @@ local function mkWindow(W, H, title)
         Position = UDim2.new(0.5, -W/2, 0.5, -H/2),
         BackgroundColor3 = C.Bg, BorderSizePixel = 0,
     }, gui)
-    crn(main, 14)
+    crn(main, 16)
     strk(main, C.Border, 1)
 
     local header = mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 46),
+        Size = UDim2.new(1, 0, 0, 52),
         BackgroundColor3 = C.Panel, BorderSizePixel = 0, ZIndex = 2,
     }, main)
-    crn(header, 14)
+    crn(header, 16)
     mk("Frame", {
-        Size = UDim2.new(1, 0, 0, 16),
-        Position = UDim2.new(0, 0, 1, -16),
+        Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.new(0, 0, 1, -20),
         BackgroundColor3 = C.Panel, BorderSizePixel = 0, ZIndex = 2,
     }, header)
 
-    mk("Frame", {
-        Size = UDim2.new(0, 4, 0, 20),
-        Position = UDim2.new(0, 10, 0.5, -10),
+    local accentBar = mk("Frame", {
+        Size = UDim2.new(0, 4, 0, 22),
+        Position = UDim2.new(0, 14, 0.5, -11),
         BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 3,
     }, header)
-    local ab = header:FindFirstChildOfClass("Frame")
-    if ab then crn(ab, 2) end
+    crn(accentBar, 2)
 
     mk("TextLabel", {
         Text = title or "UI",
-        Font = Enum.Font.GothamBold, TextSize = 15,
+        Font = Enum.Font.GothamBold, TextSize = 16,
         TextColor3 = C.Text, BackgroundTransparency = 1,
-        Position = UDim2.new(0, 24, 0, 0), Size = UDim2.new(1, -100, 1, 0),
+        Position = UDim2.new(0, 28, 0, 0), Size = UDim2.new(1, -120, 1, 0),
         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
     }, header)
 
     local minBtn = mk("TextButton", {
         Text = "—", Font = Enum.Font.GothamBold, TextSize = 14,
         TextColor3 = C.Sub, BackgroundColor3 = C.Element,
-        BorderSizePixel = 0, Size = UDim2.fromOffset(28, 28),
-        Position = UDim2.new(1, -72, 0.5, -14), AutoButtonColor = false, ZIndex = 3,
+        BorderSizePixel = 0, Size = UDim2.fromOffset(30, 30),
+        Position = UDim2.new(1, -78, 0.5, -15), AutoButtonColor = false, ZIndex = 3,
     }, header)
-    crn(minBtn, 6)
+    crn(minBtn, 8)
 
     local closeBtn = mk("TextButton", {
-        Text = "✕", Font = Enum.Font.GothamBold, TextSize = 13,
+        Text = "✕", Font = Enum.Font.GothamBold, TextSize = 14,
         TextColor3 = C.Sub, BackgroundColor3 = C.Element,
-        BorderSizePixel = 0, Size = UDim2.fromOffset(28, 28),
-        Position = UDim2.new(1, -38, 0.5, -14), AutoButtonColor = false, ZIndex = 3,
+        BorderSizePixel = 0, Size = UDim2.fromOffset(30, 30),
+        Position = UDim2.new(1, -42, 0.5, -15), AutoButtonColor = false, ZIndex = 3,
     }, header)
-    crn(closeBtn, 6)
+    crn(closeBtn, 8)
 
     closeBtn.MouseEnter:Connect(function()
         TweenService:Create(closeBtn, TweenInfo.new(0.15), { BackgroundColor3 = C.Accent, TextColor3 = C.Text }):Play()
@@ -385,10 +287,6 @@ local function mkWindow(W, H, title)
     end)
     minBtn.MouseLeave:Connect(function()
         TweenService:Create(minBtn, TweenInfo.new(0.15), { BackgroundColor3 = C.Element }):Play()
-    end)
-    minBtn.MouseButton1Click:Connect(function()
-        content.Visible = not content.Visible
-        tabBar.Visible = content.Visible
     end)
 
     local dragging, ds, sp
@@ -415,24 +313,24 @@ local function mkWindow(W, H, title)
     end)
 
     local tabBar = mk("Frame", {
-        Size = UDim2.new(1, -24, 0, 34),
-        Position = UDim2.new(0, 12, 0, 56),
+        Size = UDim2.new(1, -24, 0, 38),
+        Position = UDim2.new(0, 12, 0, 64),
         BackgroundColor3 = C.Panel, BorderSizePixel = 0, ZIndex = 2,
     }, main)
-    crn(tabBar, 8)
-    pad(tabBar, 4)
+    crn(tabBar, 10)
+    pad(tabBar, 5)
     mk("UIListLayout", {
         FillDirection = Enum.FillDirection.Horizontal,
-        Padding = UDim.new(0, 4),
+        Padding = UDim.new(0, 5),
         SortOrder = Enum.SortOrder.LayoutOrder,
         VerticalAlignment = Enum.VerticalAlignment.Center,
     }, tabBar)
 
     local content = mk("ScrollingFrame", {
-        Size = UDim2.new(1, -24, 1, -112),
-        Position = UDim2.new(0, 12, 0, 100),
+        Size = UDim2.new(1, -24, 1, -122),
+        Position = UDim2.new(0, 12, 0, 112),
         BackgroundTransparency = 1, BorderSizePixel = 0,
-        ScrollBarThickness = 3,
+        ScrollBarThickness = 4,
         ScrollBarImageColor3 = C.Accent,
         CanvasSize = UDim2.new(0, 0, 0, 0),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
@@ -441,7 +339,7 @@ local function mkWindow(W, H, title)
     }, main)
     pad(content, 0, 4, 12, 0)
     mk("UIListLayout", {
-        Padding = UDim.new(0, 10),
+        Padding = UDim.new(0, 12),
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, content)
 
@@ -454,19 +352,19 @@ local function mkWindow(W, H, title)
         local tb = mk("TextButton", {
             Text = name, Font = Enum.Font.GothamMedium, TextSize = 13,
             TextColor3 = C.Sub, BackgroundColor3 = C.Element, BackgroundTransparency = 1,
-            BorderSizePixel = 0, Size = UDim2.fromOffset(0, 26),
+            BorderSizePixel = 0, Size = UDim2.fromOffset(0, 28),
             AutomaticSize = Enum.AutomaticSize.X,
             AutoButtonColor = false, ZIndex = 3,
         }, tabBar)
-        pad(tb, 0, 14, 0, 14)
-        crn(tb, 6)
+        pad(tb, 0, 16, 0, 16)
+        crn(tb, 8)
 
         local tc = mk("Frame", {
             Size = UDim2.new(1, 0, 0, 0),
             BackgroundTransparency = 1, Visible = false,
             AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 3,
         }, content)
-        mk("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, tc)
+        mk("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }, tc)
 
         local tab = { Name = name, Container = tc, Button = tb, Sections = {} }
 
@@ -494,11 +392,11 @@ local function mkWindow(W, H, title)
                 BackgroundColor3 = C.Panel, BorderSizePixel = 0,
                 AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 3,
             }, tc)
-            crn(sf, 10)
-            pad(sf, 10)
+            crn(sf, 12)
+            pad(sf, 12)
             strk(sf, C.Border, 1, 0.4)
             mk("UIListLayout", {
-                Padding = UDim.new(0, 6),
+                Padding = UDim.new(0, 8),
                 SortOrder = Enum.SortOrder.LayoutOrder,
             }, sf)
 
@@ -516,11 +414,11 @@ local function mkWindow(W, H, title)
             function sec:Toggle(o)
                 local on = o.Default or false
                 local f = mk("Frame", {
-                    Size = UDim2.new(1, 0, 0, 34),
+                    Size = UDim2.new(1, 0, 0, 38),
                     BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
                 }, sf)
-                crn(f, 8)
-                pad(f, 0, 10, 0, 12)
+                crn(f, 10)
+                pad(f, 0, 12, 0, 14)
 
                 mk("TextLabel", {
                     Text = o.Title or "Toggle", Font = Enum.Font.GothamMedium,
@@ -530,20 +428,20 @@ local function mkWindow(W, H, title)
                 }, f)
 
                 local tk = mk("Frame", {
-                    Size = UDim2.fromOffset(36, 20),
-                    Position = UDim2.new(1, -36, 0.5, -10),
+                    Size = UDim2.fromOffset(40, 22),
+                    Position = UDim2.new(1, -40, 0.5, -11),
                     BackgroundColor3 = on and C.Accent or C.Bg,
                     BorderSizePixel = 0, ZIndex = 5,
                 }, f)
-                crn(tk, 10)
+                crn(tk, 11)
 
                 local kn = mk("Frame", {
-                    Size = UDim2.fromOffset(14, 14),
-                    Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 3, 0.5, -7),
+                    Size = UDim2.fromOffset(16, 16),
+                    Position = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
                     BackgroundColor3 = Color3.fromRGB(255, 255, 255),
                     BorderSizePixel = 0, ZIndex = 6,
                 }, tk)
-                crn(kn, 7)
+                crn(kn, 8)
 
                 local btn = mk("TextButton", {
                     Size = UDim2.fromScale(1, 1),
@@ -555,7 +453,7 @@ local function mkWindow(W, H, title)
                         BackgroundColor3 = on and C.Accent or C.Bg,
                     }):Play()
                     TweenService:Create(kn, TweenInfo.new(0.18), {
-                        Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 3, 0.5, -7),
+                        Position = on and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
                     }):Play()
                 end
 
@@ -571,20 +469,17 @@ local function mkWindow(W, H, title)
                     TweenService:Create(f, TweenInfo.new(0.15), { BackgroundColor3 = C.Element }):Play()
                 end)
 
-                local api = {}
-                api.Set = function(v) on = v apply() end
-                api.Get = function() return on end
-                return api
+                return { Set = function(v) on = v apply() end, Get = function() return on end }
             end
 
             function sec:Button(o)
                 local b = mk("TextButton", {
                     Text = o.Title or "Button", Font = Enum.Font.GothamMedium,
                     TextSize = 13, TextColor3 = C.Text, BackgroundColor3 = C.Element,
-                    BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 34),
+                    BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 38),
                     AutoButtonColor = false, ZIndex = 4,
                 }, sf)
-                crn(b, 8)
+                crn(b, 10)
                 b.MouseEnter:Connect(function()
                     TweenService:Create(b, TweenInfo.new(0.15), { BackgroundColor3 = C.Hover }):Play()
                 end)
@@ -597,24 +492,13 @@ local function mkWindow(W, H, title)
                 return b
             end
 
-            function sec:Label(text)
-                return mk("TextLabel", {
-                    Text = text or "", Font = Enum.Font.Gotham, TextSize = 12,
-                    TextColor3 = C.Sub, BackgroundTransparency = 1,
-                    Size = UDim2.new(1, 0, 0, 0),
-                    AutomaticSize = Enum.AutomaticSize.Y,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    TextWrapped = true, ZIndex = 4,
-                }, sf)
-            end
-
             function sec:Input(o)
                 local c = mk("Frame", {
-                    Size = UDim2.new(1, 0, 0, 58),
+                    Size = UDim2.new(1, 0, 0, 64),
                     BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
                 }, sf)
-                crn(c, 8)
-                pad(c, 8, 10, 8, 10)
+                crn(c, 10)
+                pad(c, 10, 12, 10, 12)
 
                 mk("TextLabel", {
                     Text = o.Title or "Input", Font = Enum.Font.GothamMedium,
@@ -629,13 +513,13 @@ local function mkWindow(W, H, title)
                     PlaceholderColor3 = C.Sub,
                     Font = Enum.Font.Gotham, TextSize = 12,
                     TextColor3 = C.Text, BackgroundColor3 = C.Bg,
-                    BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 26),
-                    Position = UDim2.new(0, 0, 0, 20),
+                    BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 28),
+                    Position = UDim2.new(0, 0, 0, 22),
                     TextXAlignment = Enum.TextXAlignment.Left,
                     ClearTextOnFocus = false, ZIndex = 5,
                 }, c)
-                crn(box, 5)
-                pad(box, 0, 8, 0, 8)
+                crn(box, 6)
+                pad(box, 0, 10, 0, 10)
                 local st = strk(box, C.Border, 1, 0.3)
 
                 box.Focused:Connect(function()
@@ -648,10 +532,7 @@ local function mkWindow(W, H, title)
                     if o.Callback then o.Callback(box.Text) end
                 end)
 
-                local api = {}
-                api.Set = function(v) box.Text = v end
-                api.Get = function() return box.Text end
-                return api
+                return { Set = function(v) box.Text = v end, Get = function() return box.Text end }
             end
 
             function sec:Slider(o)
@@ -662,11 +543,11 @@ local function mkWindow(W, H, title)
                 local val = def
 
                 local c = mk("Frame", {
-                    Size = UDim2.new(1, 0, 0, 52),
+                    Size = UDim2.new(1, 0, 0, 56),
                     BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
                 }, sf)
-                crn(c, 8)
-                pad(c, 8, 12, 8, 12)
+                crn(c, 10)
+                pad(c, 10, 14, 10, 14)
 
                 mk("TextLabel", {
                     Text = o.Title or "Slider", Font = Enum.Font.GothamMedium,
@@ -683,8 +564,8 @@ local function mkWindow(W, H, title)
                 }, c)
 
                 local track = mk("Frame", {
-                    Size = UDim2.new(1, 0, 0, 5),
-                    Position = UDim2.new(0, 0, 0, 30),
+                    Size = UDim2.new(1, 0, 0, 6),
+                    Position = UDim2.new(0, 0, 0, 32),
                     BackgroundColor3 = C.Bg, BorderSizePixel = 0, ZIndex = 5,
                 }, c)
                 crn(track, 3)
@@ -696,16 +577,16 @@ local function mkWindow(W, H, title)
                 crn(fill, 3)
 
                 local kn = mk("Frame", {
-                    Size = UDim2.fromOffset(12, 12),
-                    Position = UDim2.new((val - min) / (max - min), -6, 0.5, -6),
+                    Size = UDim2.fromOffset(14, 14),
+                    Position = UDim2.new((val - min) / (max - min), -7, 0.5, -7),
                     BackgroundColor3 = Color3.fromRGB(255, 255, 255),
                     BorderSizePixel = 0, ZIndex = 7,
                 }, track)
-                crn(kn, 6)
+                crn(kn, 7)
 
                 local hit = mk("TextButton", {
-                    Size = UDim2.new(1, 0, 0, 22),
-                    Position = UDim2.new(0, 0, 0, 21),
+                    Size = UDim2.new(1, 0, 0, 24),
+                    Position = UDim2.new(0, 0, 0, 23),
                     BackgroundTransparency = 1, Text = "", ZIndex = 8,
                 }, c)
 
@@ -717,7 +598,7 @@ local function mkWindow(W, H, title)
                     val = math.clamp(st, min, max)
                     local al = (val - min) / (max - min)
                     fill.Size = UDim2.new(al, 0, 1, 0)
-                    kn.Position = UDim2.new(al, -6, 0.5, -6)
+                    kn.Position = UDim2.new(al, -7, 0.5, -7)
                     vLbl.Text = tostring(val)
                 end
 
@@ -742,16 +623,13 @@ local function mkWindow(W, H, title)
                     end
                 end)
 
-                local api = {}
-                api.Set = function(v)
+                return { Set = function(v)
                     val = math.clamp(v, min, max)
                     local al = (val - min) / (max - min)
                     fill.Size = UDim2.new(al, 0, 1, 0)
-                    kn.Position = UDim2.new(al, -6, 0.5, -6)
+                    kn.Position = UDim2.new(al, -7, 0.5, -7)
                     vLbl.Text = tostring(val)
-                end
-                api.Get = function() return val end
-                return api
+                end, Get = function() return val end }
             end
 
             function sec:Dropdown(o)
@@ -760,15 +638,15 @@ local function mkWindow(W, H, title)
                 local sel = o.Value or (multi and {} or nil)
 
                 local c = mk("Frame", {
-                    Size = UDim2.new(1, 0, 0, 36),
+                    Size = UDim2.new(1, 0, 0, 40),
                     BackgroundColor3 = C.Element, BorderSizePixel = 0, ZIndex = 4,
                 }, sf)
-                crn(c, 8)
+                crn(c, 10)
 
                 local lbl = mk("TextLabel", {
                     Text = o.Title or "Dropdown", Font = Enum.Font.GothamMedium,
                     TextSize = 13, TextColor3 = C.Text, BackgroundTransparency = 1,
-                    Position = UDim2.new(0, 12, 0, 0),
+                    Position = UDim2.new(0, 14, 0, 0),
                     Size = UDim2.new(1, -60, 1, 0),
                     TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
                 }, c)
@@ -777,16 +655,16 @@ local function mkWindow(W, H, title)
                     Text = "▼", Font = Enum.Font.GothamBold, TextSize = 11,
                     TextColor3 = C.Sub, BackgroundTransparency = 1,
                     Size = UDim2.fromOffset(20, 20),
-                    Position = UDim2.new(1, -30, 0.5, -10), ZIndex = 5,
+                    Position = UDim2.new(1, -32, 0.5, -10), ZIndex = 5,
                 }, c)
 
                 local list = mk("Frame", {
-                    Size = UDim2.new(1, 0, 0, math.min(#values * 26 + 8, 160)),
+                    Size = UDim2.new(1, 0, 0, math.min(#values * 28 + 8, 180)),
                     Position = UDim2.new(0, 0, 1, 4),
                     BackgroundColor3 = C.Panel, BorderSizePixel = 0,
                     Visible = false, ZIndex = 20,
                 }, c)
-                crn(list, 8)
+                crn(list, 10)
                 strk(list, C.Border, 1)
                 pad(list, 4)
 
@@ -828,17 +706,17 @@ local function mkWindow(W, H, title)
                 for _, v in ipairs(values) do
                     local it = mk("TextButton", {
                         Text = "", BackgroundColor3 = C.Element,
-                        BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 24),
+                        BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 26),
                         AutoButtonColor = false, ZIndex = 22,
                     }, scroll)
-                    crn(it, 5)
+                    crn(it, 6)
 
                     local iLbl = mk("TextLabel", {
                         Text = tostring(v), Font = Enum.Font.Gotham,
                         TextSize = 12, TextColor3 = C.Text,
                         BackgroundTransparency = 1,
-                        Position = UDim2.new(0, 10, 0, 0),
-                        Size = UDim2.new(1, -20, 1, 0),
+                        Position = UDim2.new(0, 12, 0, 0),
+                        Size = UDim2.new(1, -24, 1, 0),
                         TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 23,
                     }, it)
 
@@ -904,10 +782,7 @@ local function mkWindow(W, H, title)
                     TweenService:Create(c, TweenInfo.new(0.15), { BackgroundColor3 = C.Element }):Play()
                 end)
 
-                local api = {}
-                api.Set = function(v) sel = v refreshLbl() end
-                api.Get = function() return sel end
-                return api
+                return { Set = function(v) sel = v refreshLbl() end, Get = function() return sel end }
             end
 
             table.insert(tab.Sections, sec)
@@ -923,7 +798,7 @@ local function mkWindow(W, H, title)
         BackgroundTransparency = 1, ZIndex = 100,
     }, gui)
     mk("UIListLayout", {
-        Padding = UDim.new(0, 6),
+        Padding = UDim.new(0, 8),
         SortOrder = Enum.SortOrder.LayoutOrder,
         VerticalAlignment = Enum.VerticalAlignment.Top,
         HorizontalAlignment = Enum.HorizontalAlignment.Right,
@@ -935,27 +810,27 @@ local function mkWindow(W, H, title)
             BackgroundColor3 = C.Panel, BorderSizePixel = 0,
             AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 101,
         }, notifBox)
-        crn(n, 8)
+        crn(n, 10)
         strk(n, C.Accent, 1)
-        pad(n, 8, 12, 8, 12)
+        pad(n, 10, 14, 10, 14)
 
         mk("Frame", {
-            Size = UDim2.new(0, 3, 1, -8),
-            Position = UDim2.new(0, -6, 0, 4),
+            Size = UDim2.new(0, 3, 1, -10),
+            Position = UDim2.new(0, -8, 0, 5),
             BackgroundColor3 = C.Accent, BorderSizePixel = 0, ZIndex = 102,
         }, n)
 
         local t = mk("TextLabel", {
             Text = o.Title or "Notification", Font = Enum.Font.GothamBold,
             TextSize = 12, TextColor3 = C.Text, BackgroundTransparency = 1,
-            Size = UDim2.new(1, 0, 0, 16),
+            Size = UDim2.new(1, 0, 0, 18),
             TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 102,
         }, n)
 
         local ctext = mk("TextLabel", {
             Text = o.Content or "", Font = Enum.Font.Gotham, TextSize = 11,
             TextColor3 = C.Sub, BackgroundTransparency = 1,
-            Position = UDim2.new(0, 0, 0, 18),
+            Position = UDim2.new(0, 0, 0, 20),
             Size = UDim2.new(1, 0, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
             TextXAlignment = Enum.TextXAlignment.Left,
@@ -974,15 +849,12 @@ local function mkWindow(W, H, title)
     return win
 end
 
-local win = mkWindow(580, 460, "AjJans Steal a Egg")
+local win = mkWindow(560, 440, "AjJans Steal a Egg")
 
 local TabMain = win:AddTab("Main")
-local TabHop = win:AddTab("Hop")
 local TabConfig = win:AddTab("Config")
-local TabWebhook = win:AddTab("Webhook")
-local TabExtras = win:AddTab("Extras")
 
-local SecMain = TabMain:Section("Automation")
+local SecMain = TabMain:Section("Hop")
 
 SecMain:Toggle({
     Title = "Auto Hop Server",
@@ -1004,40 +876,40 @@ SecMain:Toggle({
     end,
 })
 
-local SecHop = TabHop:Section("Targeting")
+local SecTarget = TabMain:Section("Target")
 
-SecHop:Input({
+SecTarget:Input({
     Title = "Min Money ($/s)",
     Default = "1000000",
     Placeholder = "1B / 1000000000",
     Callback = function(v) CONFIG.MinMoney = parseMoney(v) end,
 })
 
-SecHop:Slider({
+SecTarget:Slider({
     Title = "Max Players in Server",
     Min = 1, Max = 7, Default = 7, Step = 1,
     Callback = function(v) CONFIG.MaxPlayers = v end,
 })
 
-SecHop:Dropdown({
+SecTarget:Dropdown({
     Title = "Eggs",
     Values = ALL_EGGS, Multi = true, Value = {},
     Callback = function(v) CONFIG.SelectedEggs = v end,
 })
 
-SecHop:Dropdown({
+SecTarget:Dropdown({
     Title = "Rarities",
     Values = ALL_RARITIES, Multi = true, Value = {},
     Callback = function(v) CONFIG.SelectedRarities = v end,
 })
 
-SecHop:Dropdown({
+SecTarget:Dropdown({
     Title = "Mutations",
     Values = ALL_MUTATIONS, Multi = true, Value = {},
     Callback = function(v) CONFIG.SelectedMutations = v end,
 })
 
-SecHop:Dropdown({
+SecTarget:Dropdown({
     Title = "Areas",
     Values = ALL_AREAS, Multi = true, Value = {},
     Callback = function(v) CONFIG.SelectedAreas = v end,
@@ -1073,97 +945,6 @@ SecCfg:Button({
     end,
 })
 
-SecCfg:Button({
-    Title = "Delete Config",
-    Callback = function()
-        if delCfg(cfgNameBox.Get()) then
-            win:Notify({ Title = "Config", Content = "Deleted.", Duration = 3 })
-        else
-            win:Notify({ Title = "Config", Content = "Failed.", Duration = 3 })
-        end
-    end,
-})
-
-SecCfg:Button({
-    Title = "List Saved Configs",
-    Callback = function()
-        local n = listCfgs()
-        win:Notify({
-            Title = "Configs",
-            Content = #n > 0 and table.concat(n, ", ") or "No configs found.",
-            Duration = 5,
-        })
-    end,
-})
-
-SecCfg:Toggle({
-    Title = "Auto Load on Start",
-    Default = false,
-    Callback = function(v) CONFIG.AutoSave = v end,
-})
-
-local SecWH = TabWebhook:Section("Discord Alerts")
-
-SecWH:Toggle({
-    Title = "Enable Webhook",
-    Default = false,
-    Callback = function(v) CONFIG.WebhookEnabled = v end,
-})
-
-SecWH:Input({
-    Title = "Webhook URL",
-    Default = "",
-    Placeholder = "https://discord.com/api/webhooks/...",
-    Callback = function(v) CONFIG.WebhookUrl = v end,
-})
-
-SecWH:Toggle({
-    Title = "Notify on Hop",
-    Default = true,
-    Callback = function(v) CONFIG.NotifyOnHop = v end,
-})
-
-SecWH:Toggle({
-    Title = "Notify on Value Found",
-    Default = true,
-    Callback = function(v) CONFIG.NotifyOnValueFound = v end,
-})
-
-SecWH:Button({
-    Title = "Test Webhook",
-    Callback = function() sendWebhook("Test", "Webhook working!", 0x22C55E) end,
-})
-
-local SecProt = TabExtras:Section("Protection")
-
-SecProt:Toggle({
-    Title = "Anti Stun",
-    Default = false,
-    Callback = function(v) CONFIG.AntiStun = v end,
-})
-
-SecProt:Toggle({
-    Title = "Anti Ragdoll",
-    Default = false,
-    Callback = function(v) CONFIG.AntiRagdoll = v end,
-})
-
-SecProt:Toggle({
-    Title = "Anti Knockback",
-    Default = false,
-    Callback = function(v) CONFIG.AntiKnockback = v end,
-})
-
-local SecMisc = TabExtras:Section("Misc")
-
-SecMisc:Toggle({
-    Title = "Anti AFK",
-    Default = true,
-    Callback = function(v) CONFIG.AntiAFK = v end,
-})
-
-SecMisc:Label("Toggle options above to configure behavior.")
-
 LocalPlayer.CharacterAdded:Connect(function()
     if CONFIG.AutoExec then
         task.wait(2)
@@ -1179,21 +960,14 @@ RunService.Heartbeat:Connect(function()
     if CONFIG.AutoHopServer then
         local ok, val, egg = checkEggs()
         if not ok then
-            if CONFIG.NotifyOnHop then
-                sendWebhook("Server Hop", "Best: " .. tostring(val) .. " $/s (" .. tostring(egg) .. ")", 0xFF2B47)
-            end
             doHop()
             task.wait(3)
-        else
-            if CONFIG.NotifyOnValueFound then
-                sendWebhook("Target Found", "Egg: " .. tostring(egg) .. "\nValue: " .. tostring(val) .. " $/s", 0x22C55E)
-            end
         end
     end
 end)
 
 win:Notify({
     Title = "Loaded",
-    Content = "Auto Hop & Protection ready.",
+    Content = "Auto Hop ready.",
     Duration = 5,
 })
