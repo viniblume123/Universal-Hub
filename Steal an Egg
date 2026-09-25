@@ -1,4 +1,4 @@
-local AUTO_EXEC_URL = ""
+local AUTO_EXEC_URL = "https://raw.githubusercontent.com/viniblume123/Universal-Hub/refs/heads/main/Steal%20an%20Egg"
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
