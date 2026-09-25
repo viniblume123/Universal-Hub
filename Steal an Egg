@@ -33,171 +33,83 @@ local ALL_EGGS = {
     "World Burner",
 }
 
-local Assets, Save, Networking
+local Assets, Save
 
 pcall(function()
     local sh = RS:FindFirstChild("Shared")
-    if sh and sh:FindFirstChild("Save") then Save = require(sh.Save) end
+    if sh and sh:FindFirstChild("Save") then
+        Save = require(sh.Save)
+    end
     local dt = RS:FindFirstChild("Data")
-    if dt and dt:FindFirstChild("Assets") then Assets = require(dt.Assets) end
-    local pk = RS:FindFirstChild("Packages")
-    if pk and pk:FindFirstChild("Networking") then Networking = pk.Networking end
+    if dt and dt:FindFirstChild("Assets") then
+        Assets = require(dt.Assets)
+    end
 end)
 
-local function deepLookupName(cat)
+local function resolveEntry(cat)
     if not Assets then return nil end
-    local candidates = { Assets.Directory, Assets.Assets, Assets.Eggs, Assets.Pets, Assets }
-    for _, dir in ipairs(candidates) do
+    local dirs = { Assets.Directory, Assets.Assets, Assets.Eggs, Assets.Pets }
+    for _, dir in ipairs(dirs) do
         if type(dir) == "table" then
             local e = dir[cat]
-            if e then
-                if type(e) == "string" then return e end
-                if type(e) == "table" then
-                    return e.DisplayName or e.Name or e.Title or e.EggName
-                end
-            end
+            if e then return e end
         end
     end
     return nil
 end
 
-local function deepLookupRate(cat)
-    if not Assets then return 0 end
-    local candidates = { Assets.Directory, Assets.Assets, Assets.Eggs, Assets.Pets, Assets }
-    for _, dir in ipairs(candidates) do
-        if type(dir) == "table" then
-            local e = dir[cat]
-            if type(e) == "table" then
-                local r = e.EarningRate or e.Rate or e.Income or e.BaseEarning or e.MoneyPerSecond
-                if type(r) == "number" and r > 0 then return r end
-            end
-        end
+local function getNameFromEntry(e, cat)
+    if not e then return tostring(cat) end
+    if type(e) == "string" then return e end
+    if type(e) == "table" then
+        return e.DisplayName or e.Name or e.Title or e.EggName or tostring(cat)
+    end
+    return tostring(cat)
+end
+
+local function getRateFromEntry(e)
+    if not e or type(e) ~= "table" then return 0 end
+    local r = e.EarningRate or e.Rate or e.Income or e.BaseEarning or e.MoneyPerSecond
+    if type(r) == "number" and r > 0 then return r end
+    if e.Base then
+        local br = e.Base.EarningRate or e.Base.Rate or e.Base.Income
+        if type(br) == "number" then return br end
     end
     return 0
 end
 
-local cachedEggs = {}
-local hookCount = 0
-local lastDebugSample = nil
-
-local function looksLikeEggList(tbl)
-    if type(tbl) ~= "table" then return false end
-    local checked = 0
-    for _, v in pairs(tbl) do
-        if type(v) == "table" then
-            checked = checked + 1
-            if v.AssetCategory or v.Category or v.Uid or v.EggId then return true end
-            if checked >= 3 then break end
+local function getRarityFromEntry(e)
+    if not e or type(e) ~= "table" then return "?" end
+    if e.Rarity then
+        if type(e.Rarity) == "table" then
+            return e.Rarity.DisplayName or e.Rarity.Name or "?"
         end
+        return tostring(e.Rarity)
     end
-    return false
-end
-
-local function updateCache(res)
-    if not looksLikeEggList(res) then return false end
-    cachedEggs = {}
-    for _, v in pairs(res) do
-        if type(v) == "table" then table.insert(cachedEggs, v) end
-    end
-    if not lastDebugSample and #cachedEggs > 0 then
-        lastDebugSample = cachedEggs[1]
-    end
-    return true
-end
-
-local function isSystemRemote(d)
-    local path = d:GetFullName()
-    if path:find("Cmdr") then return true end
-    if path:find("Chat") then return true end
-    if path:find("PlayerModule") then return true end
-    if path:find("SoundService") then return true end
-    return false
-end
-
-local function installHooks()
-    local roots = {}
-    if Networking then table.insert(roots, Networking) end
-    local nw = RS:FindFirstChild("Network")
-    if nw then table.insert(roots, nw) end
-
-    if #roots == 0 then
-        table.insert(roots, RS)
-    end
-
-    for _, root in ipairs(roots) do
-        for _, d in ipairs(root:GetDescendants()) do
-            if d:IsA("RemoteFunction") and not isSystemRemote(d) then
-                pcall(function()
-                    local old = d.InvokeServer
-                    if type(old) ~= "function" then return end
-                    d.InvokeServer = newcclosure(function(self, ...)
-                        local res = old(self, ...)
-                        updateCache(res)
-                        return res
-                    end)
-                    hookCount = hookCount + 1
-                end)
-            end
-        end
-    end
-end
-
-installHooks()
-
-local function findSnapshotRemote()
-    local roots = {}
-    if Networking then table.insert(roots, Networking) end
-    local nw = RS:FindFirstChild("Network")
-    if nw then table.insert(roots, nw) end
-    if #roots == 0 then table.insert(roots, RS) end
-
-    for _, root in ipairs(roots) do
-        for _, d in ipairs(root:GetDescendants()) do
-            if d:IsA("RemoteFunction") then
-                local n = d.Name:lower()
-                if n:find("snapshot") or n:find("askfieldegg") then
-                    return d
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local SnapshotRemote = findSnapshotRemote()
-
-local function refreshSnapshot()
-    if not SnapshotRemote then
-        SnapshotRemote = findSnapshotRemote()
-        if not SnapshotRemote then return false end
-    end
-    local ok, res = pcall(function() return SnapshotRemote:InvokeServer() end)
-    if ok and type(res) == "table" then
-        return updateCache(res)
-    end
-    return false
+    return "?"
 end
 
 local function getEggName(egg)
     if type(egg) ~= "table" then return "?" end
-    local cat = egg.AssetCategory or egg.Category or egg.Asset or egg.EggId
-    if cat then
-        local n = deepLookupName(cat)
-        if n then return n end
-    end
-    return egg.Name or egg.EggName or tostring(cat) or "?"
+    local cat = egg.AssetCategory or egg.Category or egg.Asset or egg.EggId or egg.Id
+    local e = resolveEntry(cat)
+    return getNameFromEntry(e, cat)
+end
+
+local function getEggRate(egg)
+    if type(egg) ~= "table" then return 0 end
+    local cat = egg.AssetCategory or egg.Category or egg.Asset or egg.EggId or egg.Id
+    local e = resolveEntry(cat)
+    local r = getRateFromEntry(e)
+    if r > 0 then return r end
+    return egg.EarningRate or egg.Rate or egg.Income or 0
 end
 
 local function getEggValue(egg)
     if type(egg) ~= "table" then return 0 end
     if type(egg.Value) == "number" and egg.Value > 0 then return egg.Value end
-    local cat = egg.AssetCategory or egg.Category or egg.Asset or egg.EggId
-    local rate = 0
-    if cat then rate = deepLookupRate(cat) end
-    if rate == 0 then
-        rate = egg.EarningRate or egg.Rate or egg.Income or 0
-    end
-    if type(rate) ~= "number" then return 0 end
+    local rate = getEggRate(egg)
+    if type(rate) ~= "number" or rate <= 0 then return 0 end
     local scale = egg.Scale or egg.Size or 1
     if type(scale) ~= "number" then scale = 1 end
     local v = rate * (scale ^ 1.85)
@@ -229,6 +141,90 @@ local function nameMatches(a, b)
     if sb:find(sa, 1, true) then return true end
     return false
 end
+
+local cachedEggs = {}
+local lastCacheTime = 0
+local snapshotRemote = nil
+local hookMethodWorked = false
+local lastDumpInfo = "not yet"
+
+local function findSnapshotRemote()
+    local pk = RS:FindFirstChild("Packages")
+    if not pk then return nil end
+    local net = pk:FindFirstChild("Networking")
+    if not net then return nil end
+    for _, d in ipairs(net:GetDescendants()) do
+        if d:IsA("RemoteFunction") then
+            local n = d.Name:lower()
+            if n:find("askfieldeggsnapshot") or (n:find("snapshot") and n:find("egg")) then
+                return d
+            end
+        end
+    end
+    for _, d in ipairs(net:GetDescendants()) do
+        if d:IsA("RemoteFunction") and d.Name:lower():find("field") then
+            return d
+        end
+    end
+    return nil
+end
+
+local function fetchSnapshot()
+    if not snapshotRemote then
+        snapshotRemote = findSnapshotRemote()
+    end
+    if not snapshotRemote then return false end
+    local ok, res = pcall(function() return snapshotRemote:InvokeServer() end)
+    if not ok then
+        snapshotRemote = nil
+        return false
+    end
+    if type(res) ~= "table" then return false end
+    local list = {}
+    for _, v in pairs(res) do
+        if type(v) == "table" then table.insert(list, v) end
+    end
+    if #list == 0 then return false end
+    cachedEggs = list
+    lastCacheTime = tick()
+    return true
+end
+
+local function installNamecallHook()
+    if not hookmetamethod then return false end
+    local ok, err = pcall(function()
+        local mt = getrawmetatable(game)
+        if not mt then return end
+        local old = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            local args = { ... }
+            local result = old(self, ...)
+            if method == "InvokeServer" and self and self.Name then
+                local n = self.Name:lower()
+                if n:find("snapshot") or n:find("askfieldegg") then
+                    if type(result) == "table" then
+                        local list = {}
+                        for _, v in pairs(result) do
+                            if type(v) == "table" then table.insert(list, v) end
+                        end
+                        if #list > 0 then
+                            cachedEggs = list
+                            lastCacheTime = tick()
+                            hookMethodWorked = true
+                        end
+                    end
+                end
+            end
+            return result
+        end)
+        setreadonly(mt, true)
+    end)
+    return ok
+end
+
+installNamecallHook()
 
 local function parseMoney(s)
     if type(s) == "number" then return s end
@@ -913,7 +909,7 @@ local function addDropdown(parent, o)
 end
 
 local notifBox = mk("Frame", {
-    Size = UDim2.new(0, 320, 1, -20), Position = UDim2.new(1, -330, 0, 10),
+    Size = UDim2.new(0, 340, 1, -20), Position = UDim2.new(1, -350, 0, 10),
     BackgroundTransparency = 1, ZIndex = 100,
 }, gui)
 mk("UIListLayout", {
@@ -947,7 +943,7 @@ local function notify(o)
         AutomaticSize = Enum.AutomaticSize.Y, TextXAlignment = Enum.TextXAlignment.Left,
         TextWrapped = true, ZIndex = 102,
     }, n)
-    task.delay(o.Duration or 5, function()
+    task.delay(o.Duration or 6, function()
         TweenService:Create(n, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
         TweenService:Create(t, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
         TweenService:Create(ct, TweenInfo.new(0.3), { TextTransparency = 1 }):Play()
@@ -972,34 +968,50 @@ addButton(SecActions, {
     Callback = function() notify({ Title = "Hop", Content = "Teleporting...", Duration = 3 }) doHop() end,
 })
 addButton(SecActions, {
+    Title = "Force Refresh Snapshot",
+    Callback = function()
+        snapshotRemote = nil
+        local ok = fetchSnapshot()
+        notify({
+            Title = "Refresh",
+            Content = ok and (#cachedEggs .. " eggs loaded") or "snapshot returned nothing",
+            Duration = 6,
+        })
+    end,
+})
+addButton(SecActions, {
     Title = "Dump First Egg (Debug)",
     Callback = function()
-        if #cachedEggs == 0 then refreshSnapshot() end
+        if #cachedEggs == 0 then fetchSnapshot() end
         if #cachedEggs == 0 then
-            notify({ Title = "Cache vazio", Content = "Sem dados. Rode o ESP.", Duration = 6 })
+            notify({ Title = "Empty", Content = "No cache. Try Force Refresh.", Duration = 6 })
             return
         end
         local egg = cachedEggs[1]
         local lines = {}
+        local i = 0
         for k, v in pairs(egg) do
-            if type(v) ~= "table" then
-                table.insert(lines, tostring(k) .. " = " .. tostring(v))
-            else
+            i = i + 1
+            if i > 12 then break end
+            if type(v) == "table" then
                 table.insert(lines, tostring(k) .. " = [table]")
+            else
+                table.insert(lines, tostring(k) .. " = " .. tostring(v))
             end
         end
-        notify({ Title = "First egg fields", Content = table.concat(lines, "\n"), Duration = 15 })
+        notify({ Title = "Fields", Content = table.concat(lines, "\n"), Duration = 20 })
     end,
 })
 addButton(SecActions, {
-    Title = "Cache Count",
+    Title = "Status (Debug)",
     Callback = function()
-        if #cachedEggs == 0 then refreshSnapshot() end
         notify({
-            Title = "Cache",
-            Content = #cachedEggs .. " eggs · " .. hookCount .. " hooks\n" ..
-                (Assets and "Assets OK" or "Assets MISSING"),
-            Duration = 6,
+            Title = "Status",
+            Content = "Assets: " .. (Assets and "OK" or "MISSING") ..
+                "\nRemote: " .. (snapshotRemote and snapshotRemote.Name or "none") ..
+                "\nCache: " .. #cachedEggs .. " eggs" ..
+                "\nHook: " .. (hookMethodWorked and "worked" or "no"),
+            Duration = 10,
         })
     end,
 })
@@ -1033,9 +1045,9 @@ LocalPlayer.OnTeleport:Connect(function()
 end)
 
 task.spawn(function()
-    while task.wait(2) do
-        if #cachedEggs == 0 then
-            pcall(refreshSnapshot)
+    while task.wait(3) do
+        if #cachedEggs == 0 or tick() - lastCacheTime > 15 then
+            pcall(fetchSnapshot)
         end
     end
 end)
@@ -1077,11 +1089,12 @@ end)
 
 task.spawn(function()
     task.wait(2)
-    refreshSnapshot()
+    fetchSnapshot()
     notify({
         Title = "PRISM",
-        Content = hookCount .. " hooks · " .. #cachedEggs .. " eggs · " ..
-            (Assets and "Assets OK" or "Assets MISSING"),
-        Duration = 8,
+        Content = "Assets: " .. (Assets and "OK" or "MISS") ..
+            "\nRemote: " .. (snapshotRemote and "found" or "none") ..
+            "\nCache: " .. #cachedEggs,
+        Duration = 10,
     })
 end)
