@@ -129,8 +129,7 @@ loadConfig()
 
 local function normalizeName(s)
     if type(s) ~= "string" then return "" end
-    s = s:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
-    return s
+    return s:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
 end
 
 local function nameMatches(a, b)
@@ -146,50 +145,77 @@ local function nameMatches(a, b)
     return false
 end
 
-local snapshotRemote = nil
-local lastSnapshotNames = {}
+-- ============================================================
+-- EGG VALUE INTERCEPTOR
+-- ============================================================
 
-local function findSnapshotRemote()
+local cachedEggs = {}
+local eggRemote = nil
+local hookCount = 0
+local lastCacheTime = 0
+
+local function looksLikeEggData(tbl)
+    if type(tbl) ~= "table" then return false end
+    local checked = 0
+    for _, v in pairs(tbl) do
+        if type(v) == "table" then
+            checked = checked + 1
+            local hasName = v.Name or v.EggName or v.PetName or v.Id
+            local hasValue = v.Value or v.EarningRate or v.Rate or v.Income or v.Worth
+            if hasName and hasValue then
+                return true
+            end
+            if checked >= 3 then break end
+        end
+    end
+    return false
+end
+
+local function updateCacheFromResponse(res)
+    if not looksLikeEggData(res) then return false end
+    cachedEggs = {}
+    for k, v in pairs(res) do
+        if type(v) == "table" then
+            table.insert(cachedEggs, v)
+        end
+    end
+    lastCacheTime = tick()
+    return true
+end
+
+local function installHooks()
     for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
         if d:IsA("RemoteFunction") then
-            local n = d.Name:lower()
-            if n:find("askfieldeggsnapshot")
-               or n:find("fieldeggsnapshot")
-               or n:find("eggsnapshot")
-               or (n:find("snapshot") and n:find("egg")) then
-                return d
-            end
+            local ok, err = pcall(function()
+                local old = d.InvokeServer
+                d.InvokeServer = newcclosure(function(self, ...)
+                    local res = old(self, ...)
+                    if updateCacheFromResponse(res) then
+                        if not eggRemote then
+                            eggRemote = self
+                        end
+                    end
+                    return res
+                end)
+                hookCount = hookCount + 1
+            end)
         end
     end
-    return nil
 end
 
-local function getSnap()
-    if not snapshotRemote then
-        snapshotRemote = findSnapshotRemote()
-    end
-    if not snapshotRemote then return {} end
-    local ok, s = pcall(function() return snapshotRemote:InvokeServer() end)
-    if ok and type(s) == "table" then
-        local arr = {}
-        if #s > 0 then
-            arr = s
-        else
-            for _, v in pairs(s) do
-                if type(v) == "table" then table.insert(arr, v) end
-            end
+installHooks()
+
+-- try to fetch manually if possible
+local function tryManualRefresh()
+    if eggRemote then
+        local ok, res = pcall(function() return eggRemote:InvokeServer() end)
+        if ok then
+            updateCacheFromResponse(res)
         end
-        lastSnapshotNames = {}
-        for _, egg in ipairs(arr) do
-            if type(egg) == "table" then
-                local n = egg.Name or egg.EggName or egg.PetName or "?"
-                table.insert(lastSnapshotNames, tostring(n))
-            end
-        end
-        return arr
     end
-    return {}
 end
+
+-- ============================================================
 
 local function getServers()
     local url = ("https://games.roblox.com/v1/games/%d/servers/Public?limit=100"):format(PlaceId)
@@ -227,55 +253,71 @@ local function setSize(set)
     return n
 end
 
-local function checkEggs()
-    local snap = getSnap()
-    if #snap == 0 then return false, 0, nil, false, 0 end
+local function getEggValue(egg)
+    if type(egg) ~= "table" then return 0 end
+    if type(egg.Value) == "number" and egg.Value > 0 then return egg.Value end
+    local rate = egg.EarningRate or egg.Rate or egg.Income or egg.Worth or 0
+    if type(rate) ~= "number" then return 0 end
+    local scale = egg.Scale or egg.Size or 1
+    if type(scale) ~= "number" then scale = 1 end
+    local v = rate * (scale ^ 1.85)
+    local muts = egg.Mutations or {}
+    if type(muts) == "table" then
+        for _, m in ipairs(muts) do
+            if type(m) == "table" then
+                v = v * (m.Multiplier or m.EarningMulti or 1)
+            end
+        end
+    end
+    return v
+end
 
+local function getEggName(egg)
+    if type(egg) ~= "table" then return "?" end
+    return egg.Name or egg.EggName or egg.PetName or tostring(egg.Id) or "?"
+end
+
+local function checkEggs()
     local minMoney = parseMoney(CONFIG.MinMoneyText)
+    local hasEggFilter = setSize(CONFIG.SelectedEggs) > 0
+
+    if #cachedEggs == 0 then
+        tryManualRefresh()
+    end
+
+    if #cachedEggs == 0 then
+        return false, 0, nil, false, 0, "no-cache"
+    end
+
     local bestV, bestE = 0, nil
     local anySpawned = false
     local matchCount = 0
 
-    local hasEggFilter = setSize(CONFIG.SelectedEggs) > 0
+    for _, egg in ipairs(cachedEggs) do
+        local en = getEggName(egg)
 
-    for _, egg in ipairs(snap) do
-        if type(egg) ~= "table" then continue end
-
-        local en = egg.Name or egg.EggName or egg.PetName or ""
-        local muts = egg.Mutations or {}
-        if type(muts) ~= "table" then muts = {} end
-
-        local matched = true
+        local matched = not hasEggFilter
         if hasEggFilter then
-            matched = false
-            for name in pairs(CONFIG.SelectedEggs) do
-                if nameMatches(en, name) then
+            for target in pairs(CONFIG.SelectedEggs) do
+                if nameMatches(en, target) then
                     matched = true
                     break
                 end
             end
         end
 
-        if not matched then continue end
-
-        anySpawned = true
-        matchCount = matchCount + 1
-
-        local rate = egg.EarningRate or egg.Rate or 0
-        local scale = egg.Scale or 1
-        local v = rate * (scale ^ 1.85)
-        for _, m in ipairs(muts) do
-            if type(m) == "table" then
-                v = v * (m.Multiplier or m.EarningMulti or 1)
+        if matched then
+            anySpawned = true
+            matchCount = matchCount + 1
+            local v = getEggValue(egg)
+            if v > bestV then
+                bestV = v
+                bestE = en
             end
-        end
-        if v > bestV then
-            bestV = v
-            bestE = en
         end
     end
 
-    return bestV >= minMoney, bestV, bestE, anySpawned, matchCount
+    return bestV >= minMoney, bestV, bestE, anySpawned, matchCount, "ok"
 end
 
 local function doHop()
@@ -295,6 +337,8 @@ local function queueAutoExec()
         or (fluxus and fluxus.queue_on_teleport) or (krnl and krnl.queue_on_teleport)
     if f then pcall(f, src) end
 end
+
+-- ============ UI ============
 
 local overlayGui = mk("ScreenGui", {
     Name = "PrismOverlay",
@@ -1037,6 +1081,8 @@ local function notify(o)
     end)
 end
 
+-- ============ Build UI ============
+
 local SecActions = makeSection("Actions")
 addToggle(SecActions, {
     Title = "Auto Hop Server",
@@ -1063,20 +1109,20 @@ addButton(SecActions, {
     end,
 })
 addButton(SecActions, {
-    Title = "Show Detected Eggs (Debug)",
+    Title = "Show Cache (Debug)",
     Callback = function()
-        local snap = getSnap()
-        if #snap == 0 then
-            notify({ Title = "Debug", Content = "Snapshot vazio ou remote nao encontrado.", Duration = 8 })
+        if #cachedEggs == 0 then
+            notify({ Title = "Cache vazio", Content = "Rode o ESP para popular os dados.", Duration = 6 })
             return
         end
-        local names = {}
-        for i = 1, math.min(6, #lastSnapshotNames) do
-            table.insert(names, lastSnapshotNames[i])
+        local show = {}
+        for i = 1, math.min(5, #cachedEggs) do
+            local egg = cachedEggs[i]
+            table.insert(show, getEggName(egg) .. " = " .. formatMoney(getEggValue(egg)))
         end
         notify({
-            Title = "Debug · " .. #snap .. " eggs",
-            Content = table.concat(names, "\n"),
+            Title = "Cache · " .. #cachedEggs .. " ovos",
+            Content = table.concat(show, "\n"),
             Duration = 10,
         })
     end,
@@ -1136,7 +1182,15 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    local enough, bestV, eggName, anySpawned, matchCount = checkEggs()
+    local enough, bestV, eggName, anySpawned, matchCount, status = checkEggs()
+
+    if status == "no-cache" then
+        if lastState ~= "nocache" then
+            lastState = "nocache"
+            setStatus("waiting")
+        end
+        return
+    end
 
     if enough then
         if lastState ~= "stay" then
@@ -1169,23 +1223,11 @@ end)
 
 task.spawn(function()
     task.wait(3)
-    if not snapshotRemote then
-        snapshotRemote = findSnapshotRemote()
-    end
-    if snapshotRemote then
-        local snap = getSnap()
-        notify({
-            Title = "Remote OK",
-            Content = snapshotRemote.Name .. "  ·  " .. #snap .. " eggs",
-            Duration = 6,
-        })
-    else
-        notify({
-            Title = "Remote NOT found",
-            Content = "No snapshot remote in ReplicatedStorage.",
-            Duration = 10,
-        })
-    end
+    notify({
+        Title = "Interceptor ativo",
+        Content = hookCount .. " remotes hookados. Rode o ESP para capturar valores.",
+        Duration = 6,
+    })
 end)
 
 notify({ Title = "PRISM", Content = "Auto Hop ready.", Duration = 4 })
